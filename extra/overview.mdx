@@ -1,0 +1,99 @@
+---
+title: AuthX extra overview
+description: Optional extensions for caching, metrics, and profiling
+---
+
+AuthX extra is a separate package that provides optional extensions to enhance your AuthX authentication system with advanced features like caching, monitoring, and performance profiling.
+
+<Info>
+These features are completely optional. Install `authx-extra` only if you need Redis caching, HTTP caching, Prometheus metrics, or performance profiling capabilities.
+</Info>
+
+## Installation
+
+Install the extra package alongside AuthX:
+
+```bash
+pip install authx-extra
+```
+
+<Note>
+The `authx-extra` package is maintained separately from the core `authx` library. Visit the [authx-extra GitHub repository](https://github.com/yezz123/authx-extra) for source code and issue tracking.
+</Note>
+
+## What's included
+
+The `authx-extra` package provides four main features:
+
+<CardGroup cols={2}>
+  <Card title="Redis cache" icon="database" href="/extra/redis-cache">
+    HTTP caching with Redis backend for faster response times
+  </Card>
+  
+  <Card title="Prometheus metrics" icon="chart-line" href="/extra/prometheus-metrics">
+    Request monitoring and metrics collection for observability
+  </Card>
+  
+  <Card title="Profiling" icon="gauge" href="/extra/profiling">
+    Performance profiling with pyinstrument for optimization
+  </Card>
+  
+  <Card title="Session middleware" icon="cookie">
+    Secure session management with Redis or in-memory storage
+  </Card>
+</CardGroup>
+
+## When to use authx-extra
+
+Consider installing `authx-extra` when you need:
+
+- **Caching**: Reduce database load and improve response times by caching frequently accessed data
+- **Monitoring**: Track request metrics and performance in production environments
+- **Optimization**: Profile your application to identify performance bottlenecks
+- **Session management**: Store user session data securely with Redis backend
+
+## Features overview
+
+### Redis cache
+
+HTTP caching with Redis allows you to cache API responses and reduce server load. The caching system supports:
+
+- Time-based expiration (TTL)
+- Dynamic key generation
+- End-of-day/week expiration helpers
+- Cache invalidation decorators
+
+### Prometheus metrics
+
+Collect and expose Prometheus-compatible metrics for monitoring:
+
+- Request count tracking
+- Response time histograms
+- Custom metric prefixes
+- Automatic `/metrics` endpoint
+
+### Performance profiling
+
+Integrate pyinstrument for statistical profiling:
+
+- Low-overhead sampling profiler
+- HTML and JSON output formats
+- Per-request profiling
+- Call stack visualization
+
+### Session middleware
+
+Manage user sessions with enhanced security:
+
+- Unique session ID generation
+- Cookie-based session storage
+- Redis or in-memory backends
+- CSRF protection support
+
+## Next steps
+
+Explore the individual feature pages to learn how to integrate each extension into your FastAPI application:
+
+- [Redis cache](/extra/redis-cache) - Set up HTTP caching with Redis
+- [Prometheus metrics](/extra/prometheus-metrics) - Add monitoring to your API
+- [Profiling](/extra/profiling) - Profile your application performance

@@ -1,0 +1,282 @@
+---
+title: Implicit refresh
+description: Automatically refresh access tokens using middleware for seamless authentication
+---
+
+Implicit refresh is a middleware-based mechanism that automatically refreshes access tokens before they expire, eliminating the need for explicit refresh token endpoints. This feature provides a seamless authentication experience for cookie-based authentication.
+
+<Note>
+Implicit refresh only works with cookie-based authentication. It automatically renews access tokens without requiring separate refresh token management.
+</Note>
+
+## How it works
+
+The implicit refresh middleware intercepts requests and checks if the access token is close to expiring. If the token will expire within a configurable time window, the middleware automatically creates a new access token and sets it in the response cookies.
+
+<Steps>
+  <Step title="Request arrives">
+    The middleware intercepts the incoming request before it reaches your endpoint.
+  </Step>
+  
+  <Step title="Check token expiry">
+    The middleware extracts the access token from cookies and checks how much time remains until expiration.
+  </Step>
+  
+  <Step title="Refresh if needed">
+    If the token expires within the configured `JWT_IMPLICIT_REFRESH_DELTATIME`, a new access token is created with the same subject and data.
+  </Step>
+  
+  <Step title="Set new cookie">
+    The new access token is set in the response cookies, automatically updating the client's token.
+  </Step>
+</Steps>
+
+## Configuration
+
+Configure implicit refresh behavior using these settings in your `AuthXConfig`:
+
+```python
+from datetime import timedelta
+from authx import AuthXConfig
+
+config = AuthXConfig(
+    # Enable cookies as a token location
+    JWT_TOKEN_LOCATION=["cookies"],
+    
+    # Refresh tokens within 10 minutes of expiry
+    JWT_IMPLICIT_REFRESH_DELTATIME=timedelta(minutes=10),
+    
+    # Exclude specific routes from implicit refresh
+    JWT_IMPLICIT_REFRESH_ROUTE_EXCLUDE=["/login", "/register"],
+    
+    # Only include specific routes (if set, only these routes will refresh)
+    JWT_IMPLICIT_REFRESH_ROUTE_INCLUDE=[],
+    
+    # Exclude specific HTTP methods
+    JWT_IMPLICIT_REFRESH_METHOD_EXCLUDE=["OPTIONS"],
+    
+    # Only include specific HTTP methods (if set, only these methods will refresh)
+    JWT_IMPLICIT_REFRESH_METHOD_INCLUDE=[],
+)
+```
+
+### Configuration options
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `JWT_IMPLICIT_REFRESH_DELTATIME` | `timedelta` | `timedelta(minutes=10)` | Time window before expiry to trigger refresh |
+| `JWT_IMPLICIT_REFRESH_ROUTE_EXCLUDE` | `list[str]` | `[]` | List of routes to exclude from implicit refresh |
+| `JWT_IMPLICIT_REFRESH_ROUTE_INCLUDE` | `list[str]` | `[]` | List of routes to explicitly include (if set, only these routes refresh) |
+| `JWT_IMPLICIT_REFRESH_METHOD_EXCLUDE` | `list[str]` | `[]` | HTTP methods to exclude from implicit refresh |
+| `JWT_IMPLICIT_REFRESH_METHOD_INCLUDE` | `list[str]` | `[]` | HTTP methods to explicitly include (if set, only these methods refresh) |
+
+<Info>
+If `JWT_IMPLICIT_REFRESH_ROUTE_INCLUDE` is set, only routes in that list will trigger implicit refresh. If it's empty (default), all routes except those in `JWT_IMPLICIT_REFRESH_ROUTE_EXCLUDE` will trigger refresh.
+</Info>
+
+## Adding the middleware
+
+Add the implicit refresh middleware to your FastAPI application:
+
+```python
+from fastapi import FastAPI
+from authx import AuthX, AuthXConfig
+from datetime import timedelta
+
+app = FastAPI()
+
+# Configure AuthX with cookies enabled
+config = AuthXConfig(
+    JWT_SECRET_KEY="your-secret-key",
+    JWT_TOKEN_LOCATION=["cookies"],
+    JWT_IMPLICIT_REFRESH_DELTATIME=timedelta(minutes=10),
+    JWT_ACCESS_TOKEN_EXPIRES=timedelta(minutes=30),
+)
+
+auth = AuthX(config=config)
+
+# Add the implicit refresh middleware
+app.middleware("http")(auth.implicit_refresh_middleware)
+```
+
+## Complete example
+
+Here's a complete example showing implicit refresh in action:
+
+```python
+from fastapi import FastAPI, HTTPException, Response
+from pydantic import BaseModel
+from authx import AuthX, AuthXConfig
+from datetime import timedelta
+
+app = FastAPI()
+
+# Configure AuthX
+config = AuthXConfig(
+    JWT_SECRET_KEY="your-secret-key",
+    JWT_ALGORITHM="HS256",
+    JWT_TOKEN_LOCATION=["cookies"],
+    # Tokens expire in 30 minutes
+    JWT_ACCESS_TOKEN_EXPIRES=timedelta(minutes=30),
+    # Refresh tokens within 10 minutes of expiry
+    JWT_IMPLICIT_REFRESH_DELTATIME=timedelta(minutes=10),
+    # Exclude auth endpoints from implicit refresh
+    JWT_IMPLICIT_REFRESH_ROUTE_EXCLUDE=["/login", "/logout"],
+    # Cookie settings
+    JWT_COOKIE_SECURE=False,  # Set to True in production
+    JWT_COOKIE_CSRF_PROTECT=True,
+)
+
+auth = AuthX(config=config)
+
+# Add implicit refresh middleware
+app.middleware("http")(auth.implicit_refresh_middleware)
+
+auth.handle_errors(app)
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+@app.post("/login")
+def login(data: LoginRequest, response: Response):
+    """Login and set access token cookie."""
+    # Validate credentials (simplified)
+    if data.username == "user" and data.password == "password":
+        # Create access token
+        access_token = auth.create_access_token(
+            uid=data.username,
+            data={"role": "user"}
+        )
+        
+        # Set token in cookie
+        auth.set_access_cookies(access_token, response)
+        
+        return {"message": "Login successful"}
+    
+    raise HTTPException(status_code=401, detail="Invalid credentials")
+
+@app.get("/protected")
+async def protected_route(payload = Depends(auth.access_token_required)):
+    """Protected endpoint with implicit refresh.
+    
+    If the access token is within 10 minutes of expiry,
+    the middleware will automatically refresh it.
+    """
+    return {
+        "message": "Access granted",
+        "username": payload.sub,
+        "expires_at": payload.exp,
+    }
+
+@app.get("/api/data")
+async def get_data(payload = Depends(auth.access_token_required)):
+    """Another protected endpoint.
+    
+    The implicit refresh applies to all protected endpoints.
+    Users never need to manually refresh their tokens.
+    """
+    return {
+        "data": ["item1", "item2", "item3"],
+        "username": payload.sub,
+    }
+```
+
+## How the middleware works
+
+The `implicit_refresh_middleware` implementation (from authx/main.py:842):
+
+```python
+async def implicit_refresh_middleware(
+    self,
+    request: Request,
+    call_next: Callable[[Request], Coroutine[Any, Any, Response]],
+) -> Response:
+    """FastAPI Middleware to enable token refresh for an APIRouter."""
+    response = await call_next(request)
+
+    if self.config.has_location("cookies") and self._implicit_refresh_enabled_for_request(request):
+        with contextlib.suppress(AuthXException):
+            # Get token from cookies
+            token = await self._get_token_from_request(
+                request=request,
+                locations=["cookies"],
+                refresh=False,
+                optional=False,
+            )
+            payload = self.verify_token(token, verify_fresh=False)
+            
+            # Check if token is close to expiry
+            if (
+                datetime.timedelta(payload.time_until_expiry)
+                < self.config.JWT_IMPLICIT_REFRESH_DELTATIME
+            ):
+                # Create new access token
+                new_token = self.create_access_token(
+                    uid=payload.sub,
+                    fresh=False,
+                    data=payload.extra_dict
+                )
+                self.set_access_cookies(new_token, response=response)
+    
+    return response
+```
+
+## Benefits
+
+<Steps>
+  <Step title="Seamless user experience">
+    Users never experience authentication timeouts as tokens are refreshed automatically in the background.
+  </Step>
+  
+  <Step title="No refresh token endpoints">
+    Eliminates the need for `/refresh` endpoints and client-side token refresh logic.
+  </Step>
+  
+  <Step title="Simplified client code">
+    Clients only need to handle login and logout - no token management required.
+  </Step>
+  
+  <Step title="Security maintained">
+    Tokens still have expiration times, maintaining security while improving UX.
+  </Step>
+</Steps>
+
+## Important considerations
+
+<Warning>
+Implicit refresh **only works with cookie-based authentication**. If you're using header-based authentication, you'll need to implement traditional refresh token flows.
+</Warning>
+
+<Note>
+Refreshed access tokens are **not marked as fresh**. If you need fresh tokens for sensitive operations, users must re-authenticate via the login endpoint.
+</Note>
+
+<Info>
+The middleware silently suppresses all `AuthXException` errors during refresh attempts. This means that if a token is invalid or expired, the refresh will fail silently and the request will proceed without a refreshed token.
+</Info>
+
+## Route filtering
+
+Control which routes trigger implicit refresh:
+
+```python
+# Exclude specific routes (e.g., auth endpoints)
+config = AuthXConfig(
+    JWT_IMPLICIT_REFRESH_ROUTE_EXCLUDE=["/login", "/register", "/forgot-password"],
+)
+
+# OR: Only include specific routes (whitelist approach)
+config = AuthXConfig(
+    JWT_IMPLICIT_REFRESH_ROUTE_INCLUDE=["/api/users", "/api/posts"],
+)
+
+# Exclude specific HTTP methods
+config = AuthXConfig(
+    JWT_IMPLICIT_REFRESH_METHOD_EXCLUDE=["OPTIONS", "HEAD"],
+)
+```
+
+<Tip>
+Use route exclusion to prevent unnecessary token refreshes on public endpoints or authentication routes where implicit refresh doesn't make sense.
+</Tip>

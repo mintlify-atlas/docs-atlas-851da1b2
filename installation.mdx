@@ -1,0 +1,95 @@
+---
+title: Installation
+description: Install AuthX and verify your setup
+---
+
+AuthX is available on PyPI and can be installed using your preferred Python package manager.
+
+## Install AuthX
+
+Choose your package manager:
+
+<CodeGroup>
+```bash pip
+pip install authx
+```
+
+```bash uv
+uv add authx
+```
+
+```bash poetry
+poetry add authx
+```
+</CodeGroup>
+
+<Info>
+  AuthX requires Python 3.9 or higher and FastAPI 0.68+
+</Info>
+
+## Verify installation
+
+After installation, verify that AuthX is correctly installed:
+
+```python
+import authx
+print(authx.__version__)
+```
+
+You should see the version number (e.g., `1.5.1`).
+
+## Install extra features
+
+For additional production features like Redis caching, metrics, and profiling, install `authx-extra`:
+
+<CodeGroup>
+```bash pip
+pip install authx-extra
+```
+
+```bash uv
+uv add authx-extra
+```
+
+```bash poetry
+poetry add authx-extra
+```
+</CodeGroup>
+
+This package includes:
+
+- **Redis cache** - Session storage and caching with Redis
+- **Profiler** - Performance monitoring with pyinstrument
+- **Metrics** - Prometheus metrics collection for monitoring
+- **HTTP caching** - Response caching with cache control
+
+<Note>
+  The extra features require additional dependencies like Redis. Make sure your environment is configured accordingly.
+</Note>
+
+## Dependencies
+
+AuthX automatically installs these core dependencies:
+
+- **FastAPI** - The web framework
+- **Pydantic** - Data validation and settings management (v2.0+)
+- **PyJWT** - JSON Web Token implementation
+- **python-jose** - JavaScript Object Signing and Encryption
+
+## Development installation
+
+If you want to contribute to AuthX or run tests locally:
+
+```bash
+git clone https://github.com/yezz123/authx.git
+cd authx
+pip install -e ".[dev]"
+```
+
+This installs AuthX in editable mode with development dependencies.
+
+## Next steps
+
+<Card title="Quickstart" icon="rocket" href="/quickstart">
+  Build your first authenticated API with AuthX
+</Card>

@@ -1,0 +1,185 @@
+---
+title: Basic authentication
+description: Learn how to implement basic JWT authentication with AuthX
+---
+
+This example demonstrates the fundamental authentication flow using AuthX:
+
+- User login with credentials validation
+- Access token creation and distribution
+- Protected routes that require valid tokens
+- Token verification and payload extraction
+
+## Complete example
+
+```python
+from fastapi import FastAPI, HTTPException, Request
+from pydantic import BaseModel
+
+from authx import AuthX, AuthXConfig
+
+# Create a FastAPI app
+app = FastAPI(title="AuthX Basic Authentication Example")
+
+# Configure AuthX
+auth_config = AuthXConfig(
+    JWT_ALGORITHM="HS256",
+    JWT_SECRET_KEY="your-secret-key",  # In production, use a secure key and store it in environment variables
+    JWT_TOKEN_LOCATION=["headers"],  # Accept tokens in headers
+    JWT_HEADER_TYPE="Bearer",  # Use Bearer authentication
+)
+
+# Initialize AuthX
+auth = AuthX(config=auth_config)
+
+# Register error handlers
+auth.handle_errors(app)
+
+
+# Define a user model for login
+class User(BaseModel):
+    username: str
+    password: str
+
+
+# Sample user database (in a real app, you would use a database)
+USERS = {
+    "user1": {"password": "password1", "email": "user1@example.com"},
+    "user2": {"password": "password2", "email": "user2@example.com"},
+}
+
+
+@app.post("/login")
+def login(user: User):
+    """Login endpoint that validates credentials and returns an access token."""
+    # Check if user exists and password is correct
+    if user.username in USERS and USERS[user.username]["password"] == user.password:
+        # Create an access token with the username as the subject
+        access_token = auth.create_access_token(user.username)
+        return {"access_token": access_token, "token_type": "bearer"}
+
+    # Return error if credentials are invalid
+    raise HTTPException(status_code=401, detail="Invalid username or password")
+
+
+@app.get("/protected")
+async def protected_route(request: Request):
+    """Protected route that requires a valid access token."""
+    try:
+        # Get the token from the request
+        token = await auth.get_access_token_from_request(request)
+
+        # Verify the token
+        payload = auth.verify_token(token)
+
+        # Get the username from the token subject
+        username = payload.sub
+
+        # Return user information
+        return {
+            "message": "You have access to this protected resource",
+            "username": username,
+            "email": USERS.get(username, {}).get("email"),
+        }
+    except Exception as e:
+        # Print the error for debugging
+        print(f"Authentication error: {str(e)}")
+        raise HTTPException(status_code=401, detail=str(e)) from e
+
+
+@app.get("/")
+def read_root():
+    """Public route that doesn't require authentication."""
+    return {
+        "message": "Welcome to AuthX Basic Authentication Example",
+        "endpoints": {
+            "login": "POST /login - Get an access token",
+            "protected": "GET /protected - Access protected resource (requires token)",
+        },
+    }
+
+
+if __name__ == "__main__":
+    import os
+
+    import uvicorn
+
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run(app, host="0.0.0.0", port=port)
+```
+
+## How it works
+
+<Steps>
+  <Step title="Configure AuthX">
+    Initialize AuthX with your secret key and token location preferences. In this example, tokens are accepted in the `Authorization` header.
+  </Step>
+  
+  <Step title="Create login endpoint">
+    The `/login` endpoint validates user credentials and creates an access token using `auth.create_access_token()`. The username is stored as the token subject.
+  </Step>
+  
+  <Step title="Protect routes">
+    Protected routes use `auth.get_access_token_from_request()` to extract the token and `auth.verify_token()` to validate it. The payload contains the user identity and other claims.
+  </Step>
+</Steps>
+
+<Note>
+  In production, always store your `JWT_SECRET_KEY` in environment variables and use strong, randomly generated keys.
+</Note>
+
+## Running the example
+
+<Steps>
+  <Step title="Install dependencies">
+    ```bash
+    pip install authx-python fastapi uvicorn
+    ```
+  </Step>
+  
+  <Step title="Run the server">
+    ```bash
+    python basic_auth.py
+    ```
+    The server will start on `http://localhost:8000`.
+  </Step>
+  
+  <Step title="Login to get a token">
+    ```bash
+    curl -X POST http://localhost:8000/login \
+      -H "Content-Type: application/json" \
+      -d '{"username":"user1","password":"password1"}'
+    ```
+    
+    Response:
+    ```json
+    {
+      "access_token": "eyJ0eXAiOiJKV1QiLCJhbGc...",
+      "token_type": "bearer"
+    }
+    ```
+  </Step>
+  
+  <Step title="Access protected route">
+    ```bash
+    curl http://localhost:8000/protected \
+      -H "Authorization: Bearer eyJ0eXAiOiJKV1QiLCJhbGc..."
+    ```
+    
+    Response:
+    ```json
+    {
+      "message": "You have access to this protected resource",
+      "username": "user1",
+      "email": "user1@example.com"
+    }
+    ```
+  </Step>
+</Steps>
+
+## Key concepts
+
+- **Access tokens**: Short-lived tokens that grant access to protected resources
+- **Token subject (`sub`)**: The primary identifier stored in the token (usually username or user ID)
+- **Bearer authentication**: Standard HTTP authentication scheme where tokens are sent in the `Authorization` header
+- **Token verification**: Process of validating token signature and expiration before granting access

@@ -1,0 +1,237 @@
+---
+title: Callback system
+description: Internal callback handler for model instances and token blocklist validation
+---
+
+The callback system provides a flexible way to integrate AuthX with your user models and token revocation logic. The `_CallbackHandler` class manages two primary callbacks: model instance retrieval and token blocklist validation.
+
+## Overview
+
+The callback handler is used internally by AuthX to:
+- Retrieve user/subject models from your database
+- Check if tokens have been revoked or blocklisted
+- Support both synchronous and asynchronous callback functions
+
+<Note>
+This is an internal API. Most users should use the high-level `set_subject_getter` and `set_token_blocklist` methods on the main AuthX instance instead of working with `_CallbackHandler` directly.
+</Note>
+
+## Class: `_CallbackHandler`
+
+Generic callback handler class that manages model and token callbacks.
+
+### Constructor
+
+```python
+_CallbackHandler(model: Optional[T] = None)
+```
+
+<ParamField path="model" type="T" optional>
+  Model instance to associate with this callback handler
+</ParamField>
+
+### Properties
+
+#### `is_model_callback_set`
+
+Returns `True` if a model retrieval callback has been configured.
+
+```python
+if handler.is_model_callback_set:
+    subject = await handler._get_current_subject(uid="user123")
+```
+
+#### `is_token_callback_set`
+
+Returns `True` if a token blocklist callback has been configured.
+
+```python
+if handler.is_token_callback_set:
+    is_revoked = await handler.is_token_in_blocklist(token)
+```
+
+### Methods
+
+#### `set_callback_get_model_instance`
+
+Register a callback function to retrieve user models by identifier.
+
+```python
+def set_callback_get_model_instance(callback: ModelCallback[T]) -> None
+```
+
+<ParamField path="callback" type="ModelCallback[T]" required>
+  Function that takes a user ID and returns the user model instance. Can be sync or async.
+</ParamField>
+
+**Example:**
+
+```python
+from authx._internal._callback import _CallbackHandler
+from typing import Optional
+
+# Synchronous callback
+def get_user(uid: str) -> Optional[User]:
+    return database.users.find_one({"id": uid})
+
+# Async callback
+async def get_user_async(uid: str) -> Optional[User]:
+    return await database.users.find_one({"id": uid})
+
+handler = _CallbackHandler()
+handler.set_callback_get_model_instance(get_user_async)
+```
+
+#### `set_callback_token_blocklist`
+
+Register a callback function to check if tokens are revoked.
+
+```python
+def set_callback_token_blocklist(callback: TokenCallback) -> None
+```
+
+<ParamField path="callback" type="TokenCallback" required>
+  Function that takes a token string and returns `True` if the token is blocklisted. Can be sync or async.
+</ParamField>
+
+**Example:**
+
+```python
+# Synchronous callback
+def is_token_revoked(token: str) -> bool:
+    return redis_client.sismember("revoked_tokens", token)
+
+# Async callback
+async def is_token_revoked_async(token: str) -> bool:
+    return await redis_client.sismember("revoked_tokens", token)
+
+handler.set_callback_token_blocklist(is_token_revoked_async)
+```
+
+#### `set_subject_getter`
+
+Alias for `set_callback_get_model_instance` with a more descriptive name.
+
+```python
+def set_subject_getter(callback: ModelCallback[T]) -> None
+```
+
+#### `set_token_blocklist`
+
+Alias for `set_callback_token_blocklist` with a more descriptive name.
+
+```python
+def set_token_blocklist(callback: TokenCallback) -> None
+```
+
+#### `_get_current_subject`
+
+Internal method to retrieve the current subject using the registered callback.
+
+```python
+async def _get_current_subject(uid: str, **kwargs) -> Optional[T]
+```
+
+<ParamField path="uid" type="str" required>
+  Unique identifier for the user/subject
+</ParamField>
+
+<ParamField path="**kwargs" type="ParamSpecKwargs" optional>
+  Additional keyword arguments passed to the callback
+</ParamField>
+
+<Warning>
+Raises `AttributeError` if no model callback has been set.
+</Warning>
+
+#### `is_token_in_blocklist`
+
+Check if a token has been revoked using the registered callback.
+
+```python
+async def is_token_in_blocklist(token: Optional[str], **kwargs) -> bool
+```
+
+<ParamField path="token" type="str | None" required>
+  JWT token string to check
+</ParamField>
+
+<ParamField path="**kwargs" type="ParamSpecKwargs" optional>
+  Additional keyword arguments passed to the callback
+</ParamField>
+
+Returns `False` if no token callback is set or if token is `None`.
+
+## Implementing custom callbacks
+
+When implementing custom callbacks for production use:
+
+### Model retrieval callback
+
+```python
+from typing import Optional
+from authx import AuthX
+from models import User
+import database
+
+security = AuthX()
+
+@security.set_subject_getter
+async def get_user_from_uid(uid: str) -> Optional[User]:
+    """Retrieve user from database by ID.
+    
+    Args:
+        uid: Unique user identifier from JWT 'sub' claim
+        
+    Returns:
+        User instance or None if not found
+    """
+    return await database.users.find_one({"_id": uid})
+```
+
+### Token blocklist callback
+
+```python
+from authx import AuthX
+import redis.asyncio as redis
+
+security = AuthX()
+redis_client = redis.from_url("redis://localhost")
+
+@security.set_token_blocklist
+async def check_if_token_revoked(token: str) -> bool:
+    """Check if token has been revoked.
+    
+    Args:
+        token: The raw JWT token string
+        
+    Returns:
+        True if token is revoked, False otherwise
+    """
+    jti = security.get_raw_jwt(token).get("jti")
+    if not jti:
+        return False
+    return await redis_client.sismember("revoked_tokens", jti)
+```
+
+<Note>
+The callback system automatically detects whether your callback is synchronous or asynchronous using `inspect.iscoroutinefunction()` and handles it appropriately.
+</Note>
+
+## Type definitions
+
+The callback system uses these type aliases from `authx.types`:
+
+```python
+from typing import Callable, TypeVar
+
+T = TypeVar("T")  # Generic model type
+
+# Callback that returns a model instance
+ModelCallback[T] = Callable[[str, ...], Optional[T]]
+
+# Callback that checks token status
+TokenCallback = Callable[[str, ...], bool]
+```
+
+Both callback types support additional keyword arguments via `**kwargs`.

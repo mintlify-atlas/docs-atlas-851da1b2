@@ -1,97 +1,290 @@
 ---
-title: "Introduction"
-description: "Welcome to the new home for your documentation"
+title: "AuthX Documentation"
+description: "Ready-to-use and customizable authentication and OAuth2 management for FastAPI"
+mode: "custom"
 ---
 
-## Setting up
+<div className="relative overflow-hidden bg-gradient-to-br from-[#1e40af] via-[#3b82f6] to-[#60a5fa] dark:from-[#0f1117] dark:via-[#1a1d27] dark:to-[#242838] py-20">
+  <div className="max-w-6xl mx-auto px-6 lg:px-8">
+    <div className="text-center">
+      <h1 className="text-5xl md:text-6xl font-bold text-white dark:text-gray-100 mb-6">
+        Authentication Made Simple
+      </h1>
+      <p className="text-xl md:text-2xl text-white/90 dark:text-gray-300 max-w-3xl mx-auto mb-10">
+        Add a fully featured authentication and authorization system to your FastAPI project with JWT tokens, refresh tokens, scopes, and CSRF protection built-in.
+      </p>
+      <div className="flex flex-wrap justify-center gap-4">
+        <a
+          href="/quickstart"
+          className="inline-flex items-center px-8 py-4 rounded-lg bg-white dark:bg-gray-100 text-[#3b82f6] dark:text-[#1e40af] font-semibold hover:bg-gray-100 dark:hover:bg-gray-200 transition-colors no-underline"
+        >
+          Get Started →
+        </a>
+        <a
+          href="/api/authx"
+          className="inline-flex items-center px-8 py-4 rounded-lg border-2 border-white/30 dark:border-gray-600 bg-white/10 dark:bg-white/5 text-white dark:text-gray-100 font-semibold hover:bg-white/20 dark:hover:bg-white/10 hover:border-white/50 dark:hover:border-gray-500 transition-colors no-underline"
+        >
+          API Reference
+        </a>
+      </div>
+    </div>
+  </div>
+</div>
 
-Get your documentation site up and running in minutes.
+<div className="mt-16 mb-16 max-w-5xl mx-auto px-6">
+  <h2 className="text-3xl font-bold text-gray-900 dark:text-white mb-4">
+    Quick start
+  </h2>
+  <p className="text-base text-gray-600 dark:text-gray-400 mb-8">
+    Get up and running with AuthX in minutes. Install the package and add authentication to your FastAPI app.
+  </p>
 
-<Card
-  title="Start here"
-  icon="rocket"
-  href="/quickstart"
-  horizontal
->
-  Follow our three step quickstart guide.
-</Card>
+  <Steps>
+    <Step title="Install AuthX">
+      Install the AuthX package using pip or your preferred package manager.
+      
+      ```bash pip
+      pip install authx
+      ```
+    </Step>
+    
+    <Step title="Configure AuthX">
+      Create an `AuthXConfig` instance with your JWT secret key and token location preferences.
+      
+      ```python
+      from authx import AuthX, AuthXConfig
 
-## Make it yours
+      config = AuthXConfig(
+          JWT_SECRET_KEY="your-secret-key",  # Change this in production!
+          JWT_TOKEN_LOCATION=["headers"],
+      )
 
-Design a docs site that looks great and empowers your users.
+      auth = AuthX(config=config)
+      ```
+    </Step>
+    
+    <Step title="Protect your routes">
+      Use AuthX dependencies to protect your FastAPI routes and access token information.
+      
+      ```python
+      from fastapi import FastAPI, Depends
 
-<Columns cols={2}>
-  <Card
-    title="Edit locally"
-    icon="pen-to-square"
-    href="/development"
-  >
-    Edit your docs locally and preview them in real time.
-  </Card>
-  <Card
-    title="Customize your site"
-    icon="palette"
-    href="/essentials/settings"
-  >
-    Customize the design and colors of your site to match your brand.
-  </Card>
+      app = FastAPI()
+      auth.handle_errors(app)
+
+      @app.post("/login")
+      def login(username: str, password: str):
+          # Verify credentials (implement your logic)
+          token = auth.create_access_token(uid=username)
+          return {"access_token": token}
+
+      @app.get("/protected", dependencies=[Depends(auth.access_token_required)])
+      def protected():
+          return {"message": "Access granted"}
+      ```
+      
+      <Info>
+        The `access_token_required` dependency automatically validates the JWT token from the request headers and raises an error if the token is missing or invalid.
+      </Info>
+    </Step>
+  </Steps>
+</div>
+
+<div className="mt-16 mb-16 max-w-5xl mx-auto px-6">
+  <h2 className="text-3xl font-bold text-gray-900 dark:text-white mb-4">
+    Explore by topic
+  </h2>
+  <p className="text-base text-gray-600 dark:text-gray-400 mb-8">
+    Learn about AuthX features and how to integrate them into your application.
+  </p>
+
+  <CardGroup cols={2}>
     <Card
-    title="Set up navigation"
-    icon="map"
-    href="/essentials/navigation"
-  >
-    Organize your docs to help users find what they need and succeed with your product.
-  </Card>
-  <Card
-    title="API documentation"
-    icon="terminal"
-    href="/api-reference/introduction"
-  >
-    Auto-generate API documentation from OpenAPI specifications.
-  </Card>
-</Columns>
+      title="Token authentication"
+      icon="key"
+      href="/concepts/authentication"
+    >
+      Learn how JWT authentication works with access and refresh tokens
+    </Card>
+    <Card
+      title="Scopes & permissions"
+      icon="shield-halved"
+      href="/guides/scopes-and-permissions"
+    >
+      Implement fine-grained authorization with scope-based access control
+    </Card>
+    <Card
+      title="Cookie authentication"
+      icon="cookie"
+      href="/guides/cookie-authentication"
+    >
+      Use cookies for token storage with built-in CSRF protection
+    </Card>
+    <Card
+      title="Token revocation"
+      icon="ban"
+      href="/guides/token-revocation"
+    >
+      Implement token blocklists to revoke access before expiration
+    </Card>
+    <Card
+      title="Fresh tokens"
+      icon="clock-rotate-left"
+      href="/guides/fresh-tokens"
+    >
+      Require recent authentication for sensitive operations
+    </Card>
+    <Card
+      title="Custom callbacks"
+      icon="code"
+      href="/guides/custom-callbacks"
+    >
+      Extend AuthX behavior with custom token and user callbacks
+    </Card>
+  </CardGroup>
+</div>
 
-## Create beautiful pages
+<div className="mt-16 mb-16 max-w-5xl mx-auto px-6">
+  <h2 className="text-3xl font-bold text-gray-900 dark:text-white mb-4">
+    Features
+  </h2>
+  <p className="text-base text-gray-600 dark:text-gray-400 mb-8">
+    Everything you need for production-ready authentication.
+  </p>
 
-Everything you need to create world-class documentation.
+  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+    <div className="p-6 rounded-xl border border-gray-200 dark:border-[#27272a] bg-white dark:bg-[#1a1d27]">
+      <div className="text-[#3b82f6] dark:text-[#60a5fa] mb-3">
+        <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+        </svg>
+      </div>
+      <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">
+        JWT authentication
+      </h3>
+      <p className="text-sm text-gray-600 dark:text-gray-400">
+        Secure token-based authentication with access and refresh tokens, customizable expiration, and multiple token locations.
+      </p>
+    </div>
 
-<Columns cols={2}>
-  <Card
-    title="Write with MDX"
-    icon="pen-fancy"
-    href="/essentials/markdown"
-  >
-    Use MDX to style your docs pages.
-  </Card>
-  <Card
-    title="Code samples"
-    icon="code"
-    href="/essentials/code"
-  >
-    Add sample code to demonstrate how to use your product.
-  </Card>
-  <Card
-    title="Images"
-    icon="image"
-    href="/essentials/images"
-  >
-    Display images and other media.
-  </Card>
-  <Card
-    title="Reusable snippets"
-    icon="recycle"
-    href="/essentials/reusable-snippets"
-  >
-    Write once and reuse across your docs.
-  </Card>
-</Columns>
+    <div className="p-6 rounded-xl border border-gray-200 dark:border-[#27272a] bg-white dark:bg-[#1a1d27]">
+      <div className="text-[#3b82f6] dark:text-[#60a5fa] mb-3">
+        <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+        </svg>
+      </div>
+      <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">
+        Scope-based authorization
+      </h3>
+      <p className="text-sm text-gray-600 dark:text-gray-400">
+        Fine-grained permission control with scopes, including wildcard matching and AND/OR logic for complex access rules.
+      </p>
+    </div>
 
-## Need inspiration?
+    <div className="p-6 rounded-xl border border-gray-200 dark:border-[#27272a] bg-white dark:bg-[#1a1d27]">
+      <div className="text-[#3b82f6] dark:text-[#60a5fa] mb-3">
+        <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" />
+        </svg>
+      </div>
+      <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">
+        Multiple token locations
+      </h3>
+      <p className="text-sm text-gray-600 dark:text-gray-400">
+        Store tokens in headers, cookies, query parameters, or JSON body. Mix and match for different endpoints.
+      </p>
+    </div>
 
-<Card
-  title="See complete examples"
-  icon="stars"
-  href="https://mintlify.com/customers"
->
-  Browse our showcase of exceptional documentation sites.
-</Card>
+    <div className="p-6 rounded-xl border border-gray-200 dark:border-[#27272a] bg-white dark:bg-[#1a1d27]">
+      <div className="text-[#3b82f6] dark:text-[#60a5fa] mb-3">
+        <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+        </svg>
+      </div>
+      <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">
+        CSRF protection
+      </h3>
+      <p className="text-sm text-gray-600 dark:text-gray-400">
+        Built-in CSRF protection for cookie-based authentication with customizable methods and verification.
+      </p>
+    </div>
+
+    <div className="p-6 rounded-xl border border-gray-200 dark:border-[#27272a] bg-white dark:bg-[#1a1d27]">
+      <div className="text-[#3b82f6] dark:text-[#60a5fa] mb-3">
+        <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+        </svg>
+      </div>
+      <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">
+        Implicit refresh
+      </h3>
+      <p className="text-sm text-gray-600 dark:text-gray-400">
+        Automatic token refresh middleware keeps users authenticated without manual refresh token handling.
+      </p>
+    </div>
+
+    <div className="p-6 rounded-xl border border-gray-200 dark:border-[#27272a] bg-white dark:bg-[#1a1d27]">
+      <div className="text-[#3b82f6] dark:text-[#60a5fa] mb-3">
+        <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+        </svg>
+      </div>
+      <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">
+        Extra features
+      </h3>
+      <p className="text-sm text-gray-600 dark:text-gray-400">
+        Extend with authx-extra for Redis caching, Prometheus metrics, and performance profiling integration.
+      </p>
+    </div>
+  </div>
+</div>
+
+<div className="mt-16 mb-16 max-w-5xl mx-auto px-6">
+  <h2 className="text-3xl font-bold text-gray-900 dark:text-white mb-4">
+    Resources
+  </h2>
+  <p className="text-base text-gray-600 dark:text-gray-400 mb-8">
+    Additional resources to help you build with AuthX.
+  </p>
+
+  <CardGroup cols={3}>
+    <Card
+      title="Examples"
+      icon="code"
+      href="/examples/basic-auth"
+    >
+      Browse working examples with real code
+    </Card>
+    <Card
+      title="API reference"
+      icon="book"
+      href="/api/authx"
+    >
+      Complete API documentation
+    </Card>
+    <Card
+      title="GitHub"
+      icon="github"
+      href="https://github.com/yezz123/authx"
+    >
+      View source code and contribute
+    </Card>
+  </CardGroup>
+</div>
+
+<div className="mt-20 mb-16 max-w-5xl mx-auto px-6">
+  <div className="p-10 rounded-2xl border-2 border-[#3b82f6] dark:border-[#60a5fa] bg-gradient-to-br from-[#3b82f6]/5 to-[#60a5fa]/5 dark:from-[#1e40af]/20 dark:to-[#3b82f6]/20 text-center">
+    <h2 className="text-3xl font-bold text-gray-900 dark:text-white mb-4">
+      Ready to get started?
+    </h2>
+    <p className="text-lg text-gray-600 dark:text-gray-400 mb-8 max-w-2xl mx-auto">
+      Add secure authentication to your FastAPI application in minutes with AuthX.
+    </p>
+    <a
+      href="/quickstart"
+      className="inline-flex items-center px-8 py-4 rounded-lg bg-[#3b82f6] dark:bg-[#60a5fa] text-white dark:text-gray-900 font-semibold hover:bg-[#2563eb] dark:hover:bg-[#3b82f6] transition-colors no-underline"
+    >
+      Get Started →
+    </a>
+  </div>
+</div>

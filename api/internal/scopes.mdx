@@ -1,0 +1,321 @@
+---
+title: Scope checking functions
+description: Internal utilities for scope matching and validation with wildcard support
+---
+
+The scope utilities module provides functions for managing and validating OAuth2-style scopes with support for hierarchical namespaces and wildcard patterns.
+
+## Overview
+
+Scope utilities support:
+- Simple string scopes (e.g., `read`, `write`, `admin`)
+- Hierarchical scopes with colon separator (e.g., `users:read`, `posts:write`)
+- Wildcard patterns (e.g., `admin:*` matches `admin:users`, `admin:settings`)
+- AND/OR logic for multiple scope requirements
+
+<Note>
+These are internal utilities used by AuthX's scope validation system. Most users should use the `@AuthX.scope_required()` decorator instead of calling these functions directly.
+</Note>
+
+## Functions
+
+### `match_scope`
+
+Check if a provided scope matches a required scope with wildcard support.
+
+```python
+def match_scope(required: str, provided: str) -> bool
+```
+
+<ParamField path="required" type="str" required>
+  The scope that is required (e.g., `"users:read"`)
+</ParamField>
+
+<ParamField path="provided" type="str" required>
+  The scope that was provided in the token (e.g., `"users:*"`)
+</ParamField>
+
+Returns `True` if the provided scope satisfies the required scope.
+
+**Matching rules:**
+
+1. **Exact match**: `required == provided`
+2. **Wildcard match**: Provided scope ending with `:*` matches:
+   - The exact namespace (e.g., `admin:*` matches `admin`)
+   - Any scope under that namespace (e.g., `admin:*` matches `admin:users`, `admin:users:edit`)
+
+**Examples:**
+
+```python
+from authx._internal._scopes import match_scope
+
+# Exact matches
+match_scope("read", "read")  # True
+match_scope("users:read", "users:read")  # True
+
+# Wildcard matches
+match_scope("users:read", "users:*")  # True
+match_scope("admin", "admin:*")  # True
+match_scope("admin:users:edit", "admin:*")  # True
+
+# No match
+match_scope("users:read", "admin:*")  # False
+match_scope("users:read", "users:write")  # False
+```
+
+### `has_required_scopes`
+
+Check if provided scopes satisfy required scopes using AND or OR logic.
+
+```python
+def has_required_scopes(
+    required: Sequence[str],
+    provided: Optional[Sequence[str]],
+    all_required: bool = True
+) -> bool
+```
+
+<ParamField path="required" type="Sequence[str]" required>
+  List of scopes that are required
+</ParamField>
+
+<ParamField path="provided" type="Sequence[str] | None" required>
+  List of scopes that were provided in the token. If `None`, returns `True` only if no scopes are required.
+</ParamField>
+
+<ParamField path="all_required" type="bool" default="True">
+  If `True`, all required scopes must be satisfied (AND logic). If `False`, at least one required scope must be satisfied (OR logic).
+</ParamField>
+
+Returns `True` if the scope requirements are satisfied.
+
+**Examples:**
+
+```python
+from authx._internal._scopes import has_required_scopes
+
+# AND logic (all_required=True)
+has_required_scopes(["read"], ["read", "write"], all_required=True)  # True
+has_required_scopes(["read", "admin"], ["read"], all_required=True)  # False
+has_required_scopes(["users:read"], ["users:*"], all_required=True)  # True
+
+# OR logic (all_required=False)
+has_required_scopes(["read", "admin"], ["read"], all_required=False)  # True
+has_required_scopes(["read", "admin"], ["write"], all_required=False)  # False
+
+# No scopes provided
+has_required_scopes(["read"], None, all_required=True)  # False
+has_required_scopes([], None, all_required=True)  # True
+```
+
+### `normalize_scope`
+
+Normalize a scope string by stripping whitespace and converting to lowercase.
+
+```python
+def normalize_scope(scope: str) -> str
+```
+
+<ParamField path="scope" type="str" required>
+  The scope string to normalize
+</ParamField>
+
+Returns the normalized scope string.
+
+**Examples:**
+
+```python
+from authx._internal._scopes import normalize_scope
+
+normalize_scope(" Read ")  # "read"
+normalize_scope("USERS:WRITE")  # "users:write"
+normalize_scope("  admin:*  ")  # "admin:*"
+```
+
+### `parse_scope_string`
+
+Parse a delimited scope string into a list of individual scopes.
+
+```python
+def parse_scope_string(scope_string: str, delimiter: str = " ") -> list[str]
+```
+
+<ParamField path="scope_string" type="str" required>
+  A string containing scopes separated by the delimiter
+</ParamField>
+
+<ParamField path="delimiter" type="str" default='" "'>
+  The delimiter used to separate scopes. Defaults to space for OAuth2 compatibility.
+</ParamField>
+
+Returns a list of individual scope strings with whitespace stripped.
+
+**Examples:**
+
+```python
+from authx._internal._scopes import parse_scope_string
+
+# Space-separated (OAuth2 standard)
+parse_scope_string("read write admin")
+# ["read", "write", "admin"]
+
+parse_scope_string("users:read users:write")
+# ["users:read", "users:write"]
+
+# Custom delimiter
+parse_scope_string("read,write,admin", delimiter=",")
+# ["read", "write", "admin"]
+
+# Empty string
+parse_scope_string("")  # []
+```
+
+<Note>
+This function is useful for OAuth2 compatibility where scopes are often passed as a single space-separated string in authorization requests.
+</Note>
+
+## Hierarchical scopes
+
+Hierarchical scopes use colon (`:`) as a separator to create namespaces:
+
+```python
+# User operations
+scopes = [
+    "users:read",     # Read user data
+    "users:write",    # Create/update users
+    "users:delete",   # Delete users
+]
+
+# Admin wildcard grants all user operations
+admin_scopes = ["users:*"]
+
+has_required_scopes(["users:read"], admin_scopes)  # True
+has_required_scopes(["users:write"], admin_scopes)  # True
+has_required_scopes(["users:delete"], admin_scopes)  # True
+```
+
+**Multi-level hierarchies:**
+
+```python
+scopes = [
+    "admin:users:read",
+    "admin:users:write",
+    "admin:posts:read",
+    "admin:posts:write",
+]
+
+# Wildcard at any level
+match_scope("admin:users:read", "admin:*")  # True
+match_scope("admin:users:read", "admin:users:*")  # True
+```
+
+## Wildcard patterns
+
+Wildcard scopes use the `*` character to grant access to all operations within a namespace:
+
+```python
+# Grant all read operations
+provided = ["*:read"]
+match_scope("users:read", "*:read")  # False - wildcards only match as suffix
+
+# Grant all operations in a namespace
+provided = ["admin:*"]
+match_scope("admin", "admin:*")  # True - matches the namespace itself
+match_scope("admin:users", "admin:*")  # True
+match_scope("admin:users:edit", "admin:*")  # True
+```
+
+<Warning>
+Wildcards only work as suffixes (e.g., `admin:*`). Prefixes like `*:read` or middle wildcards like `admin:*:read` are not supported and will be treated as literal scope names.
+</Warning>
+
+## Practical examples
+
+### API permission system
+
+```python
+from authx._internal._scopes import has_required_scopes, parse_scope_string
+
+# User's token contains space-separated scopes
+token_scopes_str = "users:read posts:read posts:write"
+user_scopes = parse_scope_string(token_scopes_str)
+
+# Check if user can read users
+can_read_users = has_required_scopes(["users:read"], user_scopes)
+# True
+
+# Check if user can delete posts (requires both read and delete)
+can_delete_posts = has_required_scopes(
+    ["posts:read", "posts:delete"],
+    user_scopes,
+    all_required=True
+)
+# False - missing posts:delete
+```
+
+### Admin override
+
+```python
+from authx._internal._scopes import has_required_scopes
+
+# Regular user
+user_scopes = ["posts:read", "posts:write"]
+
+# Admin with wildcard
+admin_scopes = ["admin:*"]
+
+# Both can access posts
+has_required_scopes(["posts:read"], user_scopes)  # True
+has_required_scopes(["posts:read"], admin_scopes)  # False
+
+# But admin can access admin endpoints
+has_required_scopes(["admin:users"], admin_scopes)  # True
+has_required_scopes(["admin:settings"], admin_scopes)  # True
+```
+
+### OR logic for flexible access
+
+```python
+from authx._internal._scopes import has_required_scopes
+
+# Allow access if user has either owner or admin permission
+user_scopes = ["posts:owner"]
+
+can_edit = has_required_scopes(
+    ["posts:owner", "admin:*"],
+    user_scopes,
+    all_required=False  # OR logic
+)
+# True - user has posts:owner
+```
+
+## Integration with AuthX
+
+These functions are used internally by AuthX's scope validation:
+
+```python
+from fastapi import Depends, FastAPI
+from authx import AuthX, TokenPayload
+
+app = FastAPI()
+security = AuthX()
+
+@app.get("/users")
+@security.scope_required(["users:read"])
+async def get_users(token: TokenPayload = Depends(security.access_token_required)):
+    # Token scopes are validated using has_required_scopes()
+    return {"users": [...]}
+
+@app.delete("/users/{user_id}")
+@security.scope_required(["users:read", "users:delete"], all_required=True)
+async def delete_user(
+    user_id: str,
+    token: TokenPayload = Depends(security.access_token_required)
+):
+    # Requires BOTH scopes
+    return {"deleted": user_id}
+```
+
+<Note>
+The `@security.scope_required()` decorator uses `has_required_scopes()` internally to validate token scopes.
+</Note>

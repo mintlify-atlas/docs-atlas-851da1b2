@@ -1,80 +1,287 @@
 ---
-title: "Quickstart"
-description: "Start building awesome documentation in minutes"
+title: Quickstart
+description: Build your first authenticated FastAPI application with AuthX in 5 minutes
 ---
 
-## Get started in three steps
+This guide walks you through creating a complete FastAPI application with login and protected routes using AuthX.
 
-Get your documentation site running locally and make your first customization.
+## Complete example
 
-### Step 1: Set up your local environment
+Here's a minimal but fully functional authentication system:
 
-<AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
+```python
+from fastapi import FastAPI, Depends, HTTPException
+from pydantic import BaseModel
+from authx import AuthX, AuthXConfig
+
+app = FastAPI()
+
+# Configure AuthX
+config = AuthXConfig(
+    JWT_SECRET_KEY="your-secret-key",  # Change this!
+    JWT_TOKEN_LOCATION=["headers"],
+)
+
+auth = AuthX(config=config)
+auth.handle_errors(app)
+
+# User model
+class User(BaseModel):
+    username: str
+    password: str
+
+# Sample user database
+USERS = {
+    "user1": {"password": "password1", "email": "user1@example.com"},
+    "user2": {"password": "password2", "email": "user2@example.com"},
+}
+
+@app.post("/login")
+def login(user: User):
+    if user.username in USERS and USERS[user.username]["password"] == user.password:
+        access_token = auth.create_access_token(user.username)
+        return {"access_token": access_token, "token_type": "bearer"}
+    raise HTTPException(status_code=401, detail="Invalid credentials")
+
+@app.get("/protected", dependencies=[Depends(auth.access_token_required)])
+def protected():
+    return {"message": "You have access to this protected resource"}
+```
+
+<Warning>
+  Never hardcode secrets in production! Use environment variables to store your `JWT_SECRET_KEY`.
+</Warning>
+
+## Step-by-step guide
+
+Let's build this authentication system step by step.
+
+<Steps>
+  <Step title="Create your FastAPI app">
+    Start by creating a basic FastAPI application:
+
+    ```python
+    from fastapi import FastAPI
     
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
-  </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
+    app = FastAPI(title="My Authenticated API")
+    ```
+  </Step>
+
+  <Step title="Configure AuthX">
+    Create an `AuthXConfig` instance with your settings:
+
+    ```python
+    from authx import AuthXConfig
     
-    <Tip>Your preview updates automatically as you edit files.</Tip>
-  </Accordion>
-</AccordionGroup>
+    config = AuthXConfig(
+        JWT_SECRET_KEY="your-secret-key",  # Required for signing tokens
+        JWT_ALGORITHM="HS256",              # Default algorithm
+        JWT_TOKEN_LOCATION=["headers"],     # Accept tokens in headers
+    )
+    ```
 
-### Step 2: Deploy your changes
+    <Tip>
+      In production, load secrets from environment variables:
+      ```python
+      import os
+      
+      config = AuthXConfig(
+          JWT_SECRET_KEY=os.getenv("JWT_SECRET_KEY"),
+      )
+      ```
+    </Tip>
+  </Step>
 
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
+  <Step title="Initialize AuthX">
+    Create an `AuthX` instance and register error handlers:
+
+    ```python
+    from authx import AuthX
     
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
+    auth = AuthX(config=config)
+    auth.handle_errors(app)
+    ```
 
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
+    The `handle_errors()` call ensures authentication errors return proper HTTP responses instead of 500 errors.
+  </Step>
 
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
+  <Step title="Create a login endpoint">
+    Create an endpoint that validates credentials and returns a token:
 
-### Step 3: Go live
+    ```python
+    from fastapi import HTTPException
+    from pydantic import BaseModel
+    
+    class User(BaseModel):
+        username: str
+        password: str
+    
+    USERS = {
+        "user1": {"password": "password1", "email": "user1@example.com"},
+    }
+    
+    @app.post("/login")
+    def login(user: User):
+        if user.username in USERS and USERS[user.username]["password"] == user.password:
+            access_token = auth.create_access_token(user.username)
+            return {"access_token": access_token, "token_type": "bearer"}
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+    ```
 
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
+    <Note>
+      In a real application, use proper password hashing (bcrypt, argon2) and fetch users from a database.
+    </Note>
+  </Step>
+
+  <Step title="Protect your routes">
+    Use `auth.access_token_required` as a dependency to protect routes:
+
+    ```python
+    from fastapi import Depends
+    
+    @app.get("/protected", dependencies=[Depends(auth.access_token_required)])
+    def protected():
+        return {"message": "You have access to this protected resource"}
+    ```
+
+    What happens:
+    - **No token** → `401 Missing JWT in request`
+    - **Invalid token** → `401 Invalid Token`
+    - **Valid token** → Route executes normally
+  </Step>
+</Steps>
+
+## Run the application
+
+Save your code to `main.py` and run it:
+
+```bash
+uvicorn main:app --reload
+```
+
+Your API is now running at `http://localhost:8000`.
+
+## Test the API
+
+Let's test the authentication flow:
+
+<Steps>
+  <Step title="Try accessing the protected route (should fail)">
+    ```bash
+    curl http://localhost:8000/protected
+    ```
+
+    Response:
+    ```json
+    {
+      "detail": "Missing JWT in request"
+    }
+    ```
+  </Step>
+
+  <Step title="Login to get a token">
+    ```bash
+    curl -X POST "http://localhost:8000/login" \
+      -H "Content-Type: application/json" \
+      -d '{"username": "user1", "password": "password1"}'
+    ```
+
+    Response:
+    ```json
+    {
+      "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+      "token_type": "bearer"
+    }
+    ```
+  </Step>
+
+  <Step title="Access the protected route with the token">
+    ```bash
+    curl http://localhost:8000/protected \
+      -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+    ```
+
+    Response:
+    ```json
+    {
+      "message": "You have access to this protected resource"
+    }
+    ```
+  </Step>
+</Steps>
+
+## Get the current user
+
+To access token information in your protected routes:
+
+```python
+from fastapi import Depends
+from authx import TokenPayload
+
+@app.get("/me")
+def get_current_user(payload: TokenPayload = Depends(auth.access_token_required)):
+    return {
+        "user_id": payload.sub,
+        "email": USERS.get(payload.sub, {}).get("email")
+    }
+```
+
+The `TokenPayload` contains:
+- `sub` - Subject (the user ID you passed to `create_access_token`)
+- `exp` - Expiration time
+- `iat` - Issued at time
+- `type` - Token type ("access" or "refresh")
+- `fresh` - Whether the token is fresh
+- `scopes` - List of scopes (if provided)
+
+## Add refresh tokens
+
+For longer sessions, use refresh tokens to issue new access tokens:
+
+```python
+from fastapi import Request
+
+@app.post("/login")
+def login(user: User):
+    if user.username in USERS and USERS[user.username]["password"] == user.password:
+        access_token = auth.create_access_token(user.username)
+        refresh_token = auth.create_refresh_token(user.username)
+        return {
+            "access_token": access_token,
+            "refresh_token": refresh_token,
+            "token_type": "bearer"
+        }
+    raise HTTPException(status_code=401, detail="Invalid credentials")
+
+@app.post("/refresh")
+async def refresh(request: Request):
+    refresh_token = await auth.get_refresh_token_from_request(request)
+    payload = auth.verify_token(refresh_token, verify_type=True)
+    
+    # Create new access token
+    access_token = auth.create_access_token(payload.sub)
+    return {"access_token": access_token, "token_type": "bearer"}
+```
+
+<Info>
+  Access tokens typically expire in 15 minutes, while refresh tokens can last for days or weeks.
+</Info>
 
 ## Next steps
 
-Now that you have your docs running, explore these key features:
+Now that you have basic authentication working, explore more features:
 
 <CardGroup cols={2}>
-
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
-
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
-
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
-
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
-
+  <Card title="Token locations" icon="map-pin">
+    Learn how to accept tokens from cookies, query parameters, or JSON body
+  </Card>
+  <Card title="Scopes" icon="shield">
+    Implement fine-grained permissions with scope-based authorization
+  </Card>
+  <Card title="Token freshness" icon="clock">
+    Require re-authentication for sensitive operations
+  </Card>
+  <Card title="Configuration" icon="gear">
+    Explore all configuration options for customizing AuthX
+  </Card>
 </CardGroup>
-
-<Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
-</Note>

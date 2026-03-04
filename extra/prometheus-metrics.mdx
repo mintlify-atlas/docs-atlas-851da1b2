@@ -1,0 +1,192 @@
+---
+title: Prometheus metrics
+description: Monitor your FastAPI application with Prometheus
+---
+
+The `authx-extra` package provides Prometheus metrics collection through middleware that automatically tracks request counts, response times, and other important metrics for your FastAPI application.
+
+<Warning>
+You need to install `authx-extra` to use Prometheus metrics.
+
+```bash
+pip install authx-extra
+```
+</Warning>
+
+## How Prometheus metrics work
+
+Metrics collection with Prometheus relies on the pull model, meaning that Prometheus is responsible for getting metrics (scraping) from the services that it monitors. This is different from other tools like Graphite, which passively wait for clients to push their metrics to a known server.
+
+## Exposing and scraping metrics
+
+Clients have only one responsibility: make their metrics available for a Prometheus server to scrape. This is done by exposing an HTTP endpoint, usually `/metrics`, which returns the full list of metrics (with label sets) and their values. This endpoint is very cheap to call as it simply outputs the current value of each metric without doing any calculation.
+
+On the Prometheus server side, each target (statically defined or dynamically discovered) is scraped at a regular interval (scrape interval). Each scrape reads the `/metrics` endpoint to get the current state of the client metrics and persists the values in the Prometheus time-series database.
+
+## Add metrics to your application
+
+Add the `MetricsMiddleware` to your FastAPI application and expose the `/metrics` endpoint:
+
+```python
+from fastapi import FastAPI
+from authx_extra.metrics import MetricsMiddleware, get_metrics
+
+app = FastAPI()
+app.add_middleware(MetricsMiddleware)
+app.add_route("/metrics", get_metrics)
+```
+
+That's it! Your application will now collect and expose Prometheus metrics at the `/metrics` endpoint.
+
+## MetricsMiddleware configuration
+
+The `MetricsMiddleware` class accepts several configuration parameters:
+
+```python
+from fastapi import FastAPI
+from authx_extra.metrics import MetricsMiddleware
+import prometheus_client
+
+app = FastAPI()
+
+app.add_middleware(
+    MetricsMiddleware,
+    prefix="authx_",
+    buckets=(
+        0.002,
+        0.05,
+        0.1,
+        prometheus_client.utils.INF,
+    )
+)
+```
+
+### Parameters
+
+- **app**: A `FastAPI` instance representing your FastAPI application
+- **prefix**: A string specifying the prefix for Prometheus metrics (default: `"authx_"`)
+- **buckets**: A tuple of float values representing the histogram buckets for request durations (default: `(0.002, 0.05, 0.1, +Inf)`)
+
+## Collected metrics
+
+The middleware automatically collects the following metrics:
+
+### Request count
+
+A Prometheus Counter metric that tracks the total number of requests:
+
+- **Name**: `{prefix}request_count`
+- **Type**: Counter
+- **Labels**: `method`, `path`, `status`
+
+### Request duration
+
+A Prometheus Histogram metric that tracks the duration of requests:
+
+- **Name**: `{prefix}request_time`
+- **Type**: Histogram
+- **Labels**: `method`, `path`, `status`
+- **Buckets**: Configurable (default: 0.002s, 0.05s, 0.1s, +Inf)
+
+## How the middleware works
+
+The `MetricsMiddleware` class inherits from Starlette's `BaseHTTPMiddleware` and implements the `dispatch` method that is called for each request.
+
+For each request, the middleware:
+
+1. Records the request method, path, and start time
+2. Calls the next middleware or request handler in the pipeline
+3. Captures the response status code
+4. Measures the total time taken to process the request
+5. Updates the corresponding Prometheus metrics
+
+## View your metrics
+
+Once you've added the middleware and metrics endpoint, you can view your metrics by visiting:
+
+```
+http://localhost:8000/metrics
+```
+
+You'll see output in the Prometheus text exposition format:
+
+```
+# HELP authx_request_count Total number of requests
+# TYPE authx_request_count counter
+authx_request_count{method="GET",path="/api/users",status="200"} 42.0
+authx_request_count{method="POST",path="/api/users",status="201"} 15.0
+
+# HELP authx_request_time Request duration in seconds
+# TYPE authx_request_time histogram
+authx_request_time_bucket{method="GET",path="/api/users",status="200",le="0.002"} 10.0
+authx_request_time_bucket{method="GET",path="/api/users",status="200",le="0.05"} 38.0
+authx_request_time_bucket{method="GET",path="/api/users",status="200",le="0.1"} 42.0
+authx_request_time_bucket{method="GET",path="/api/users",status="200",le="+Inf"} 42.0
+```
+
+## Configure Prometheus to scrape metrics
+
+Add your application to your Prometheus configuration file (`prometheus.yml`):
+
+```yaml
+scrape_configs:
+  - job_name: 'fastapi-app'
+    scrape_interval: 15s
+    static_configs:
+      - targets: ['localhost:8000']
+```
+
+<Info>
+For production deployments, consider using service discovery mechanisms instead of static targets.
+</Info>
+
+## Custom metric prefixes
+
+You can customize the metric prefix to avoid collisions with other services:
+
+```python
+app.add_middleware(
+    MetricsMiddleware,
+    prefix="my_service_"
+)
+```
+
+This will generate metrics like `my_service_request_count` and `my_service_request_time`.
+
+## Custom histogram buckets
+
+Adjust the histogram buckets to match your application's performance characteristics:
+
+```python
+import prometheus_client
+
+app.add_middleware(
+    MetricsMiddleware,
+    buckets=(
+        0.001,   # 1ms
+        0.005,   # 5ms
+        0.01,    # 10ms
+        0.05,    # 50ms
+        0.1,     # 100ms
+        0.5,     # 500ms
+        1.0,     # 1s
+        prometheus_client.utils.INF
+    )
+)
+```
+
+<Note>
+Choose buckets that align with your service level objectives (SLOs). This helps you better understand your application's performance distribution.
+</Note>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Profiling" icon="gauge" href="/extra/profiling">
+    Profile slow requests to identify bottlenecks
+  </Card>
+  
+  <Card title="Redis cache" icon="database" href="/extra/redis-cache">
+    Add caching to improve response times
+  </Card>
+</CardGroup>

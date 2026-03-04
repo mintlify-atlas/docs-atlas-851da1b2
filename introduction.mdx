@@ -1,0 +1,113 @@
+---
+title: Introduction
+description: Ready-to-use and customizable authentication and OAuth2 management for FastAPI
+---
+
+AuthX is a fully featured authentication and authorization library for [FastAPI](https://fastapi.tiangolo.com/) applications. It's designed to be simple, customizable, and secure, providing JWT-based authentication with minimal configuration.
+
+## Why AuthX?
+
+AuthX takes the complexity out of implementing authentication in your FastAPI projects:
+
+- **Ready to use** - Get started with just a few lines of code
+- **Customizable** - Configure every aspect of JWT handling to fit your needs
+- **Secure by default** - Built-in CSRF protection, token freshness, and best practices
+- **Type safe** - Full type hints and Pydantic 2 support
+- **FastAPI native** - Designed specifically for FastAPI's dependency injection system
+
+## Features
+
+### Core authentication
+
+- **JWT tokens** - Industry-standard JSON Web Tokens for stateless authentication
+- **Access and refresh tokens** - Keep users logged in with automatic token rotation
+- **Token freshness** - Require re-authentication for sensitive operations
+- **Token blocklist** - Revoke tokens when needed (logout, security incidents)
+- **Multiple token locations** - Headers, cookies, query parameters, or JSON body
+
+### Security features
+
+- **CSRF protection** - Automatic CSRF token generation for cookie-based auth
+- **Scope-based authorization** - Fine-grained permissions with hierarchical scopes
+- **Configurable algorithms** - Support for HS256, RS256, and other JWT algorithms
+- **Token verification** - Comprehensive validation of claims, expiry, and signatures
+
+### Developer experience
+
+- **FastAPI dependencies** - Protect routes with simple `Depends()` decorators
+- **Error handling** - Automatic conversion of auth errors to proper HTTP responses
+- **Type hints** - Full IDE autocomplete and type checking
+- **Extensible** - Callbacks for custom user loading and token validation
+
+## Quick example
+
+Here's a complete authentication system in under 30 lines:
+
+```python
+from fastapi import FastAPI, Depends, HTTPException
+from authx import AuthX, AuthXConfig
+
+app = FastAPI()
+
+# Configure AuthX
+config = AuthXConfig(
+    JWT_SECRET_KEY="your-secret-key",
+    JWT_TOKEN_LOCATION=["headers"],
+)
+
+auth = AuthX(config=config)
+auth.handle_errors(app)
+
+@app.post("/login")
+def login(username: str, password: str):
+    if username == "test" and password == "test":
+        token = auth.create_access_token(uid=username)
+        return {"access_token": token}
+    raise HTTPException(401, detail="Invalid credentials")
+
+@app.get("/protected", dependencies=[Depends(auth.access_token_required)])
+def protected():
+    return {"message": "Hello World"}
+```
+
+## Extra features
+
+Install `authx-extra` for additional production features:
+
+<CodeGroup>
+```bash pip
+pip install authx-extra
+```
+
+```bash uv
+uv add authx-extra
+```
+
+```bash poetry
+poetry add authx-extra
+```
+</CodeGroup>
+
+This adds:
+
+- **Redis session store** - Distributed session management and caching
+- **HTTP caching** - Response caching with cache control headers
+- **Performance profiling** - Built-in profiler using pyinstrument
+- **Prometheus metrics** - Track authentication events and performance
+
+## Requirements
+
+- Python 3.9+
+- FastAPI 0.68+
+- Pydantic 2.0+
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Installation" icon="download" href="/installation">
+    Install AuthX and verify your setup
+  </Card>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Build your first authenticated API in 5 minutes
+  </Card>
+</CardGroup>

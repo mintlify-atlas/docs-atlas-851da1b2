@@ -1,0 +1,394 @@
+---
+title: Access and refresh tokens
+description: Implement secure long-lived sessions with access and refresh tokens
+---
+
+Access and refresh tokens provide a secure way to maintain long-lived user sessions. Access tokens are short-lived for security, while refresh tokens allow users to obtain new access tokens without re-authenticating.
+
+## How it works
+
+<Steps>
+  <Step title="Login">
+    User provides credentials and receives both an access token and a refresh token.
+  </Step>
+  
+  <Step title="API requests">
+    Client uses the short-lived access token for API requests.
+  </Step>
+  
+  <Step title="Token expiry">
+    When the access token expires, the client uses the refresh token to obtain a new access token.
+  </Step>
+  
+  <Step title="No re-authentication">
+    User stays logged in without entering credentials again until the refresh token expires.
+  </Step>
+</Steps>
+
+<Info>
+  **Best practice**: Access tokens should be short-lived (15-30 minutes) while refresh tokens can be long-lived (days or weeks).
+</Info>
+
+## Configuration
+
+Configure token expiration times:
+
+```python
+from datetime import timedelta
+from authx import AuthX, AuthXConfig
+
+auth_config = AuthXConfig(
+    JWT_ALGORITHM="HS256",
+    JWT_SECRET_KEY="your-secret-key",
+    JWT_TOKEN_LOCATION=["headers", "json"],
+    # Access token expires in 15 minutes
+    JWT_ACCESS_TOKEN_EXPIRES=timedelta(minutes=15),
+    # Refresh token expires in 30 days
+    JWT_REFRESH_TOKEN_EXPIRES=timedelta(days=30),
+)
+
+auth = AuthX(config=auth_config)
+```
+
+<Tip>
+  You can also set expiration as integer seconds:
+  ```python
+  JWT_ACCESS_TOKEN_EXPIRES=900  # 15 minutes
+  ```
+</Tip>
+
+## Creating both token types
+
+Generate both access and refresh tokens during login:
+
+```python
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+
+app = FastAPI()
+auth.handle_errors(app)
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+@app.post("/login")
+def login(data: LoginRequest):
+    """Login endpoint that returns both access and refresh tokens."""
+    # Validate credentials
+    if data.username in USERS and USERS[data.username]["password"] == data.password:
+        # Create both token types
+        access_token = auth.create_access_token(uid=data.username)
+        refresh_token = auth.create_refresh_token(uid=data.username)
+        
+        return {
+            "access_token": access_token,
+            "refresh_token": refresh_token,
+            "token_type": "bearer"
+        }
+    
+    raise HTTPException(status_code=401, detail="Invalid credentials")
+```
+
+## Refreshing access tokens
+
+Create an endpoint that accepts a refresh token and returns a new access token:
+
+```python
+from fastapi import Request
+
+@app.post("/refresh")
+async def refresh_token(request: Request):
+    """Refresh endpoint that creates a new access token."""
+    # Get refresh token from request
+    refresh_token = await auth.get_refresh_token_from_request(request)
+    
+    # Verify the refresh token
+    payload = auth.verify_token(refresh_token, verify_type=True)
+    
+    # Create a new access token with the same subject
+    new_access_token = auth.create_access_token(uid=payload.sub)
+    
+    return {
+        "access_token": new_access_token,
+        "token_type": "bearer"
+    }
+```
+
+<Warning>
+  Always verify that the token type is correct using `verify_type=True` to prevent refresh tokens from being used as access tokens.
+</Warning>
+
+## Using refresh tokens in requests
+
+Clients can send refresh tokens in different ways:
+
+<CodeGroup>
+
+```bash Headers
+curl -X POST http://localhost:8000/refresh \
+  -H "Authorization: Bearer <refresh_token>"
+```
+
+```bash JSON body
+curl -X POST http://localhost:8000/refresh \
+  -H "Content-Type: application/json" \
+  -d '{"refresh_token": "<refresh_token>"}'
+```
+
+```python Python client
+import httpx
+
+# Using headers
+response = httpx.post(
+    "http://localhost:8000/refresh",
+    headers={"Authorization": f"Bearer {refresh_token}"}
+)
+
+# Using JSON body
+response = httpx.post(
+    "http://localhost:8000/refresh",
+    json={"refresh_token": refresh_token}
+)
+
+data = response.json()
+new_access_token = data["access_token"]
+```
+
+</CodeGroup>
+
+## Protected routes with access tokens
+
+Protect your API endpoints with access tokens:
+
+```python
+from authx.schema import TokenPayload
+
+@app.get("/protected")
+async def protected_route(payload: TokenPayload = auth.ACCESS_REQUIRED):
+    """Protected route that requires a valid access token."""
+    return {
+        "message": "Access granted",
+        "username": payload.sub,
+        "token_type": payload.type,  # "access"
+    }
+```
+
+## Requiring specific token types
+
+You can enforce that only specific token types are accepted:
+
+```python
+from fastapi import Depends
+
+@app.get("/api/data")
+async def get_data(payload: TokenPayload = auth.ACCESS_REQUIRED):
+    """Only accepts access tokens."""
+    return {"data": "sensitive information"}
+
+@app.post("/auth/refresh")
+async def refresh(payload: TokenPayload = auth.REFRESH_REQUIRED):
+    """Only accepts refresh tokens."""
+    new_access_token = auth.create_access_token(uid=payload.sub)
+    return {"access_token": new_access_token}
+```
+
+## Preserving custom data during refresh
+
+Maintain custom claims when refreshing tokens:
+
+```python
+@app.post("/login")
+def login(data: LoginRequest):
+    user = USERS[data.username]
+    
+    # Add custom data to both tokens
+    custom_data = {
+        "role": user["role"],
+        "email": user["email"],
+    }
+    
+    access_token = auth.create_access_token(
+        uid=data.username,
+        data=custom_data
+    )
+    refresh_token = auth.create_refresh_token(
+        uid=data.username,
+        data=custom_data
+    )
+    
+    return {
+        "access_token": access_token,
+        "refresh_token": refresh_token,
+        "token_type": "bearer"
+    }
+
+@app.post("/refresh")
+async def refresh_token(request: Request):
+    refresh_token = await auth.get_refresh_token_from_request(request)
+    payload = auth.verify_token(refresh_token, verify_type=True)
+    
+    # Preserve custom data in the new access token
+    new_access_token = auth.create_access_token(
+        uid=payload.sub,
+        data=payload.extra_dict  # Preserve custom claims
+    )
+    
+    return {"access_token": new_access_token, "token_type": "bearer"}
+```
+
+## Complete example
+
+```python
+from datetime import timedelta
+from fastapi import FastAPI, HTTPException, Request
+from pydantic import BaseModel
+from authx import AuthX, AuthXConfig
+from authx.schema import TokenPayload
+
+app = FastAPI(title="Access and Refresh Tokens Example")
+
+# Configure with different expiration times
+auth_config = AuthXConfig(
+    JWT_ALGORITHM="HS256",
+    JWT_SECRET_KEY="your-secret-key",
+    JWT_TOKEN_LOCATION=["headers", "json"],
+    JWT_ACCESS_TOKEN_EXPIRES=timedelta(minutes=15),
+    JWT_REFRESH_TOKEN_EXPIRES=timedelta(days=30),
+)
+
+auth = AuthX(config=auth_config)
+auth.handle_errors(app)
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+USERS = {
+    "user1": {"password": "password1", "email": "user1@example.com"},
+    "user2": {"password": "password2", "email": "user2@example.com"},
+}
+
+@app.post("/login")
+def login(data: LoginRequest):
+    """Login and receive both access and refresh tokens."""
+    if data.username in USERS and USERS[data.username]["password"] == data.password:
+        access_token = auth.create_access_token(uid=data.username)
+        refresh_token = auth.create_refresh_token(uid=data.username)
+        
+        return {
+            "access_token": access_token,
+            "refresh_token": refresh_token,
+            "token_type": "bearer"
+        }
+    
+    raise HTTPException(status_code=401, detail="Invalid credentials")
+
+@app.post("/refresh")
+async def refresh_token(request: Request):
+    """Use refresh token to get a new access token."""
+    refresh_token = await auth.get_refresh_token_from_request(request)
+    payload = auth.verify_token(refresh_token, verify_type=True)
+    
+    # Create new access token
+    new_access_token = auth.create_access_token(uid=payload.sub)
+    
+    return {"access_token": new_access_token, "token_type": "bearer"}
+
+@app.get("/protected")
+async def protected_route(payload: TokenPayload = auth.ACCESS_REQUIRED):
+    """Protected endpoint requiring access token."""
+    return {
+        "message": "Access granted",
+        "username": payload.sub,
+        "email": USERS.get(payload.sub, {}).get("email"),
+    }
+```
+
+## Client-side flow
+
+Here's how a client application would handle the token flow:
+
+<Steps>
+  <Step title="Initial login">
+    ```python
+    import httpx
+    
+    # Login
+    response = httpx.post(
+        "http://localhost:8000/login",
+        json={"username": "user1", "password": "password1"}
+    )
+    
+    tokens = response.json()
+    access_token = tokens["access_token"]
+    refresh_token = tokens["refresh_token"]
+    
+    # Store tokens securely
+    # - Access token: In memory (not localStorage for security)
+    # - Refresh token: In secure HTTP-only cookie or secure storage
+    ```
+  </Step>
+
+  <Step title="Make API requests">
+    ```python
+    # Use access token for API calls
+    response = httpx.get(
+        "http://localhost:8000/protected",
+        headers={"Authorization": f"Bearer {access_token}"}
+    )
+    ```
+  </Step>
+
+  <Step title="Handle expiration">
+    ```python
+    # When access token expires (401 response)
+    if response.status_code == 401:
+        # Refresh the access token
+        refresh_response = httpx.post(
+            "http://localhost:8000/refresh",
+            headers={"Authorization": f"Bearer {refresh_token}"}
+        )
+        
+        # Get new access token
+        new_tokens = refresh_response.json()
+        access_token = new_tokens["access_token"]
+        
+        # Retry original request
+        response = httpx.get(
+            "http://localhost:8000/protected",
+            headers={"Authorization": f"Bearer {access_token}"}
+        )
+    ```
+  </Step>
+</Steps>
+
+## Security best practices
+
+<Warning>
+  **Important security considerations:**
+  
+  - Store access tokens in memory, not in localStorage (vulnerable to XSS)
+  - Store refresh tokens in HTTP-only cookies or secure storage
+  - Use short expiration times for access tokens (15-30 minutes)
+  - Implement refresh token rotation (issue new refresh token with each refresh)
+  - Validate token types to prevent misuse
+  - Consider token revocation for logout functionality
+</Warning>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Fresh tokens" icon="sparkles" href="/guides/fresh-tokens">
+    Require recent authentication for sensitive operations
+  </Card>
+  <Card title="Token revocation" icon="ban" href="/guides/token-revocation">
+    Implement logout and token blacklisting
+  </Card>
+  <Card title="Cookie authentication" icon="cookie" href="/guides/cookie-authentication">
+    Use secure HTTP-only cookies for token storage
+  </Card>
+  <Card title="Error handling" icon="triangle-exclamation" href="/guides/error-handling">
+    Handle authentication errors gracefully
+  </Card>
+</CardGroup>

@@ -1,0 +1,605 @@
+---
+title: Token schemas
+description: TokenPayload and RequestToken schemas for JWT data structures
+---
+
+AuthX provides two main Pydantic models for working with JWT tokens: `TokenPayload` for decoded token data and `RequestToken` for tokens extracted from requests.
+
+## TokenPayload
+
+Represents the decoded JWT payload with all claims and metadata.
+
+### Attributes
+
+<ParamField path="sub" type="str" required>
+  Subject claim - unique identifier for the user/entity
+</ParamField>
+
+<ParamField path="jti" type="Optional[str]" default="auto-generated">
+  JWT ID - unique identifier for this token
+</ParamField>
+
+<ParamField path="iss" type="Optional[str]" default="None">
+  Issuer claim - identifies who issued the token
+</ParamField>
+
+<ParamField path="aud" type="Optional[StringOrSequence]" default="None">
+  Audience claim - intended recipients of the token
+</ParamField>
+
+<ParamField path="exp" type="Optional[DateTimeExpression]" default="None">
+  Expiration time - when the token expires
+</ParamField>
+
+<ParamField path="nbf" type="Optional[Union[Numeric, DateTimeExpression]]" default="None">
+  Not before time - token is not valid before this time
+</ParamField>
+
+<ParamField path="iat" type="Optional[Union[Numeric, DateTimeExpression]]" default="current timestamp">
+  Issued at time - when the token was created
+</ParamField>
+
+<ParamField path="type" type="Optional[str]" default="'access'">
+  Token type: `"access"` or `"refresh"`
+</ParamField>
+
+<ParamField path="fresh" type="bool" default="False">
+  Whether the token is fresh (user recently authenticated)
+</ParamField>
+
+<ParamField path="csrf" type="Optional[str]" default="''">
+  CSRF protection token
+</ParamField>
+
+<ParamField path="scopes" type="Optional[list[str]]" default="None">
+  List of permission scopes granted by this token
+</ParamField>
+
+### Properties
+
+#### extra_dict
+
+Get additional custom fields beyond the standard JWT claims.
+
+<ResponseField name="return" type="dict[str, Any]">
+  Dictionary of extra fields not in the base model
+</ResponseField>
+
+```python
+payload = TokenPayload(
+    sub="user123",
+    role="admin",
+    department="IT"
+)
+
+extra = payload.extra_dict
+# {"role": "admin", "department": "IT"}
+```
+
+#### issued_at
+
+Get the token's issuance time as a datetime object.
+
+<ResponseField name="return" type="datetime.datetime">
+  UTC datetime when the token was issued
+</ResponseField>
+
+```python
+print(f"Token issued at: {payload.issued_at}")
+```
+
+#### expiry_datetime
+
+Get the token's expiration time as a datetime object.
+
+<ResponseField name="return" type="datetime.datetime">
+  UTC datetime when the token expires
+</ResponseField>
+
+```python
+if payload.expiry_datetime < datetime.now(timezone.utc):
+    print("Token has expired")
+```
+
+#### time_until_expiry
+
+Calculate remaining time before token expiration.
+
+<ResponseField name="return" type="datetime.timedelta">
+  Time remaining until expiration
+</ResponseField>
+
+```python
+time_left = payload.time_until_expiry
+if time_left.total_seconds() < 300:
+    print("Token expires in less than 5 minutes")
+```
+
+#### time_since_issued
+
+Calculate elapsed time since token was issued.
+
+<ResponseField name="return" type="datetime.timedelta">
+  Time elapsed since issuance
+</ResponseField>
+
+```python
+age = payload.time_since_issued
+print(f"Token is {age.total_seconds()} seconds old")
+```
+
+### Methods
+
+#### has_scopes()
+
+Check if the token contains specific scopes.
+
+<ParamField path="*scopes" type="str" required>
+  Variable number of scope strings to check
+</ParamField>
+
+<ParamField path="all_required" type="bool" default="True">
+  If True, ALL scopes must be present (AND logic). If False, at least ONE scope must be present (OR logic).
+</ParamField>
+
+<ResponseField name="return" type="bool">
+  True if scope requirements are satisfied
+</ResponseField>
+
+```python
+payload.scopes = ["users:read", "posts:write"]
+
+# Check single scope
+payload.has_scopes("users:read")  # True
+
+# Check multiple scopes (AND)
+payload.has_scopes("users:read", "posts:write")  # True
+payload.has_scopes("users:read", "admin")  # False
+
+# Check multiple scopes (OR)
+payload.has_scopes("users:read", "admin", all_required=False)  # True
+
+# Wildcard scopes
+payload.scopes = ["admin:*"]
+payload.has_scopes("admin:users")  # True
+payload.has_scopes("admin:settings")  # True
+payload.has_scopes("users:read")  # False
+```
+
+<Note>
+  Supports hierarchical scopes with wildcard matching. A scope ending with `:*` matches any scope under that namespace.
+</Note>
+
+#### encode()
+
+Encode the payload into a JWT string.
+
+<ParamField path="key" type="str" required>
+  Cryptographic key for signing the token
+</ParamField>
+
+<ParamField path="algorithm" type="AlgorithmType" default="'HS256'">
+  Algorithm to use for signing
+</ParamField>
+
+<ParamField path="ignore_errors" type="bool" default="True">
+  Suppress encoding errors
+</ParamField>
+
+<ParamField path="headers" type="Optional[dict[str, Any]]" default="None">
+  Custom JWT headers
+</ParamField>
+
+<ParamField path="data" type="Optional[dict[str, Any]]" default="None">
+  Additional data to include in the token
+</ParamField>
+
+<ResponseField name="return" type="str">
+  The encoded JWT string
+</ResponseField>
+
+```python
+payload = TokenPayload(
+    sub="user123",
+    exp=timedelta(hours=1),
+    scopes=["users:read"]
+)
+
+token = payload.encode(
+    key="your-secret-key",
+    algorithm="HS256"
+)
+print(token)  # eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+```
+
+#### decode()
+
+Decode a JWT string into a TokenPayload instance.
+
+<ParamField path="token" type="str" required>
+  The JWT string to decode
+</ParamField>
+
+<ParamField path="key" type="str" required>
+  Cryptographic key for verification
+</ParamField>
+
+<ParamField path="algorithms" type="Optional[Sequence[AlgorithmType]]" default="['HS256']">
+  List of allowed algorithms
+</ParamField>
+
+<ParamField path="audience" type="Optional[StringOrSequence]" default="None">
+  Expected audience claim
+</ParamField>
+
+<ParamField path="issuer" type="Optional[str]" default="None">
+  Expected issuer claim
+</ParamField>
+
+<ParamField path="verify" type="bool" default="True">
+  Enable signature verification
+</ParamField>
+
+<ResponseField name="return" type="TokenPayload">
+  Decoded and validated token payload
+</ResponseField>
+
+```python
+token_string = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+
+payload = TokenPayload.decode(
+    token=token_string,
+    key="your-secret-key",
+    algorithms=["HS256"],
+    verify=True
+)
+
+print(payload.sub)  # user123
+print(payload.scopes)  # ["users:read"]
+```
+
+### Usage examples
+
+#### Creating a payload
+
+```python
+from datetime import timedelta
+from authx.schema import TokenPayload
+
+# Basic payload
+payload = TokenPayload(
+    sub="user123",
+    exp=timedelta(hours=1)
+)
+
+# Payload with scopes
+payload = TokenPayload(
+    sub="user123",
+    exp=timedelta(hours=1),
+    scopes=["users:read", "posts:write"],
+    fresh=True
+)
+
+# Payload with custom data
+payload = TokenPayload(
+    sub="user123",
+    exp=timedelta(hours=1),
+    role="admin",
+    department="IT",
+    permissions=["all"]
+)
+```
+
+#### Working with token timing
+
+```python
+import datetime
+
+payload = TokenPayload(
+    sub="user123",
+    exp=timedelta(hours=1)
+)
+
+# Check if token is expiring soon
+if payload.time_until_expiry < timedelta(minutes=5):
+    print("Token expiring soon, refresh needed")
+
+# Check token age
+if payload.time_since_issued > timedelta(hours=24):
+    print("Token is more than 24 hours old")
+
+# Get exact expiry time
+expiry = payload.expiry_datetime
+print(f"Token expires at: {expiry.isoformat()}")
+```
+
+#### Scope validation
+
+```python
+payload = TokenPayload(
+    sub="user123",
+    scopes=["users:read", "users:write", "posts:read"]
+)
+
+# Check permissions before operations
+if payload.has_scopes("users:write"):
+    # Allow user modification
+    update_user(user_id, data)
+
+if payload.has_scopes("users:delete", "users:write"):
+    # Requires both scopes
+    delete_user(user_id)
+
+if payload.has_scopes("admin", "superuser", all_required=False):
+    # Requires at least one
+    access_admin_panel()
+```
+
+## RequestToken
+
+Represents a token extracted from an HTTP request, with associated metadata.
+
+### Attributes
+
+<ParamField path="token" type="str" required>
+  The raw JWT token string
+</ParamField>
+
+<ParamField path="type" type="TokenType" default="'access'">
+  Token type: `"access"` or `"refresh"`
+</ParamField>
+
+<ParamField path="location" type="TokenLocation" required>
+  Where the token was found: `"headers"`, `"cookies"`, `"json"`, or `"query"`
+</ParamField>
+
+<ParamField path="csrf" type="Optional[str]" default="None">
+  CSRF token from the request (for cookie-based auth)
+</ParamField>
+
+### Methods
+
+#### verify()
+
+Verify and decode the token with comprehensive security checks.
+
+<ParamField path="key" type="str" required>
+  Cryptographic key for verification
+</ParamField>
+
+<ParamField path="algorithms" type="Optional[Sequence[AlgorithmType]]" default="['HS256']">
+  List of allowed algorithms
+</ParamField>
+
+<ParamField path="audience" type="Optional[StringOrSequence]" default="None">
+  Expected audience claim
+</ParamField>
+
+<ParamField path="issuer" type="Optional[str]" default="None">
+  Expected issuer claim
+</ParamField>
+
+<ParamField path="verify_jwt" type="bool" default="True">
+  Enable JWT signature verification
+</ParamField>
+
+<ParamField path="verify_type" type="bool" default="True">
+  Verify token type matches expected type
+</ParamField>
+
+<ParamField path="verify_csrf" type="bool" default="True">
+  Verify CSRF token (for cookie-based auth)
+</ParamField>
+
+<ParamField path="verify_fresh" type="bool" default="False">
+  Require token to be fresh
+</ParamField>
+
+<ResponseField name="return" type="TokenPayload">
+  Validated and decoded token payload
+</ResponseField>
+
+**Raises:**
+- `JWTDecodeError` - Token decoding failed
+- `AccessTokenRequiredError` - Expected access token, got refresh
+- `RefreshTokenRequiredError` - Expected refresh token, got access
+- `FreshTokenRequiredError` - Fresh token required
+- `CSRFError` - CSRF validation failed
+
+```python
+from authx.schema import RequestToken
+
+request_token = RequestToken(
+    token="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+    type="access",
+    location="headers"
+)
+
+# Verify with all checks
+payload = request_token.verify(
+    key="your-secret-key",
+    algorithms=["HS256"],
+    verify_type=True,
+    verify_csrf=True
+)
+
+# Verify refresh token
+refresh_token = RequestToken(
+    token=refresh_jwt,
+    type="refresh",
+    location="cookies",
+    csrf="csrf-token-value"
+)
+
+payload = refresh_token.verify(
+    key="your-secret-key",
+    verify_type=True,
+    verify_csrf=True
+)
+```
+
+### Usage examples
+
+#### Manual token extraction and verification
+
+```python
+from fastapi import Request, HTTPException
+from authx.schema import RequestToken
+
+@app.get("/manual-auth")
+async def manual_auth(request: Request):
+    # Extract token from header
+    auth_header = request.headers.get("Authorization")
+    if not auth_header or not auth_header.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing token")
+    
+    token_string = auth_header.replace("Bearer ", "")
+    
+    # Create RequestToken
+    request_token = RequestToken(
+        token=token_string,
+        type="access",
+        location="headers"
+    )
+    
+    # Verify
+    try:
+        payload = request_token.verify(
+            key="your-secret-key",
+            verify_type=True
+        )
+        return {"user_id": payload.sub}
+    except Exception as e:
+        raise HTTPException(status_code=401, detail=str(e))
+```
+
+#### Cookie-based authentication with CSRF
+
+```python
+from fastapi import Request, HTTPException
+from authx.schema import RequestToken
+
+@app.post("/cookie-auth")
+async def cookie_auth(request: Request):
+    # Get token from cookie
+    token = request.cookies.get("access_token_cookie")
+    if not token:
+        raise HTTPException(status_code=401)
+    
+    # Get CSRF token from header
+    csrf = request.headers.get("X-CSRF-TOKEN")
+    
+    request_token = RequestToken(
+        token=token,
+        type="access",
+        location="cookies",
+        csrf=csrf
+    )
+    
+    try:
+        payload = request_token.verify(
+            key="your-secret-key",
+            verify_csrf=True
+        )
+        return {"authenticated": True, "user": payload.sub}
+    except CSRFError:
+        raise HTTPException(status_code=403, detail="CSRF validation failed")
+    except Exception as e:
+        raise HTTPException(status_code=401, detail=str(e))
+```
+
+#### Fresh token validation
+
+```python
+@app.delete("/account")
+async def delete_account(request: Request):
+    token = await extract_token(request)  # Your extraction logic
+    
+    request_token = RequestToken(
+        token=token,
+        type="access",
+        location="headers"
+    )
+    
+    try:
+        payload = request_token.verify(
+            key="your-secret-key",
+            verify_fresh=True  # Require fresh authentication
+        )
+        # Proceed with account deletion
+        delete_user_account(payload.sub)
+        return {"deleted": True}
+    except FreshTokenRequiredError:
+        raise HTTPException(
+            status_code=401,
+            detail="Fresh authentication required for this action"
+        )
+```
+
+## Complete example
+
+```python
+from datetime import timedelta
+from fastapi import FastAPI, Request, HTTPException
+from authx import AuthX, AuthXConfig
+from authx.schema import TokenPayload, RequestToken
+
+app = FastAPI()
+config = AuthXConfig(JWT_SECRET_KEY="your-secret-key")
+auth = AuthX(config=config)
+
+@app.post("/login")
+def login(username: str, password: str):
+    # Authenticate user
+    user_id = authenticate(username, password)
+    
+    # Create payload with scopes
+    payload = TokenPayload(
+        sub=user_id,
+        exp=timedelta(hours=1),
+        fresh=True,
+        scopes=["users:read", "users:write"]
+    )
+    
+    # Encode to JWT
+    token = payload.encode(
+        key=config.JWT_SECRET_KEY,
+        algorithm=config.JWT_ALGORITHM
+    )
+    
+    return {"access_token": token}
+
+@app.get("/protected")
+async def protected(request: Request):
+    # Extract token
+    token_string = request.headers.get("Authorization", "").replace("Bearer ", "")
+    
+    if not token_string:
+        raise HTTPException(status_code=401)
+    
+    # Create RequestToken
+    request_token = RequestToken(
+        token=token_string,
+        type="access",
+        location="headers"
+    )
+    
+    # Verify and decode
+    try:
+        payload = request_token.verify(
+            key=config.JWT_SECRET_KEY,
+            algorithms=[config.JWT_ALGORITHM]
+        )
+    except Exception as e:
+        raise HTTPException(status_code=401, detail=str(e))
+    
+    # Check scopes
+    if not payload.has_scopes("users:read"):
+        raise HTTPException(status_code=403, detail="Insufficient permissions")
+    
+    return {
+        "user_id": payload.sub,
+        "scopes": payload.scopes,
+        "time_until_expiry": payload.time_until_expiry.total_seconds()
+    }
+```

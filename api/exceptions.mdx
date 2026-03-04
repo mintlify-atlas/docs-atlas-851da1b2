@@ -1,0 +1,547 @@
+---
+title: Exception classes
+description: Exception hierarchy and error handling in AuthX
+---
+
+AuthX provides a comprehensive exception hierarchy for handling authentication and JWT-related errors. All exceptions inherit from `AuthXException` for easy catching of library-specific errors.
+
+## Exception hierarchy
+
+```
+AuthXException (base)
+├── BadConfigurationError
+├── JWTDecodeError
+├── NoAuthorizationError
+├── CSRFError
+├── TokenError (base for token errors)
+│   ├── MissingTokenError
+│   │   └── MissingCSRFTokenError
+│   ├── TokenTypeError
+│   │   ├── AccessTokenRequiredError
+│   │   └── RefreshTokenRequiredError
+│   ├── RevokedTokenError
+│   ├── TokenRequiredError
+│   ├── FreshTokenRequiredError
+│   └── InsufficientScopeError
+└── InvalidToken
+```
+
+## Base exceptions
+
+### AuthXException
+
+Base exception class for all AuthX errors.
+
+```python
+from authx.exceptions import AuthXException
+
+try:
+    payload = await auth.access_token_required(request)
+except AuthXException as e:
+    # Catch any AuthX-related error
+    print(f"Authentication error: {e}")
+```
+
+<Note>
+  Use this to catch all AuthX exceptions in a single except block.
+</Note>
+
+## Configuration exceptions
+
+### BadConfigurationError
+
+Raised when AuthX configuration is invalid or incomplete.
+
+**Common causes:**
+- Using an unsupported algorithm
+- Missing required keys (JWT_SECRET_KEY for symmetric algorithms)
+- Missing JWT_PRIVATE_KEY or JWT_PUBLIC_KEY for asymmetric algorithms
+
+```python
+from authx import AuthXConfig
+from authx.exceptions import BadConfigurationError
+
+try:
+    config = AuthXConfig(
+        JWT_ALGORITHM="RS256",
+        # Missing JWT_PRIVATE_KEY and JWT_PUBLIC_KEY
+    )
+    auth = AuthX(config=config)
+    # This will raise when trying to create tokens
+    token = auth.create_access_token(uid="user123")
+except BadConfigurationError as e:
+    print(f"Configuration error: {e}")
+    # "JWT_ALGORITHM RS256 requires a key, please set JWT_PUBLIC_KEY and JWT_PRIVATE_KEY"
+```
+
+## JWT exceptions
+
+### JWTDecodeError
+
+Raised when a JWT token cannot be decoded or verified.
+
+**Common causes:**
+- Invalid token format
+- Token signature verification failed
+- Token has expired
+- Invalid claims (issuer, audience, etc.)
+- Token is not yet valid (nbf claim)
+
+```python
+from authx.exceptions import JWTDecodeError
+
+try:
+    token = await auth.get_access_token_from_request(request)
+    payload = auth.verify_token(token)
+except JWTDecodeError as e:
+    return JSONResponse(
+        status_code=401,
+        content={"error": "Invalid or expired token"}
+    )
+```
+
+## Authorization exceptions
+
+### NoAuthorizationError
+
+Raised when no authorization credentials are found in the request.
+
+```python
+from authx.exceptions import NoAuthorizationError
+
+try:
+    payload = await auth.access_token_required(request)
+except NoAuthorizationError:
+    return JSONResponse(
+        status_code=401,
+        content={"error": "No authorization provided"}
+    )
+```
+
+## CSRF exceptions
+
+### CSRFError
+
+Raised when CSRF token validation fails.
+
+**Common causes:**
+- Missing CSRF token in request headers
+- CSRF token mismatch between cookie and header
+- Missing CSRF claim in JWT
+
+```python
+from authx.exceptions import CSRFError
+
+try:
+    payload = await auth.access_token_required(request)
+except CSRFError as e:
+    return JSONResponse(
+        status_code=403,
+        content={"error": "CSRF validation failed", "detail": str(e)}
+    )
+```
+
+<Note>
+  CSRF errors only occur with cookie-based authentication when `JWT_COOKIE_CSRF_PROTECT=True`.
+</Note>
+
+## Token exceptions
+
+### TokenError
+
+Base exception for all token-related errors.
+
+```python
+from authx.exceptions import TokenError
+
+try:
+    payload = await auth.access_token_required(request)
+except TokenError as e:
+    # Catch any token-related error
+    return JSONResponse(
+        status_code=401,
+        content={"error": str(e)}
+    )
+```
+
+### MissingTokenError
+
+Raised when a required token is not found in the request.
+
+```python
+from authx.exceptions import MissingTokenError
+
+try:
+    token = await auth.get_access_token_from_request(request)
+except MissingTokenError:
+    return JSONResponse(
+        status_code=401,
+        content={"error": "Access token required"}
+    )
+```
+
+### MissingCSRFTokenError
+
+Raised when a CSRF token is expected but not found.
+
+```python
+from authx.exceptions import MissingCSRFTokenError
+
+try:
+    payload = await auth.access_token_required(request)
+except MissingCSRFTokenError:
+    return JSONResponse(
+        status_code=403,
+        content={"error": "CSRF token required in request headers"}
+    )
+```
+
+### TokenTypeError
+
+Raised when a token has the wrong type (access vs refresh).
+
+```python
+from authx.exceptions import TokenTypeError
+
+try:
+    # Trying to use a refresh token where access token is required
+    payload = auth.verify_token(token, verify_type=True)
+except TokenTypeError as e:
+    return JSONResponse(
+        status_code=401,
+        content={"error": str(e)}  # "'access' token required, 'refresh' token received"
+    )
+```
+
+### AccessTokenRequiredError
+
+Raised when an access token is required but a different token type was provided.
+
+```python
+from authx.exceptions import AccessTokenRequiredError
+
+try:
+    payload = await auth.access_token_required(request)
+except AccessTokenRequiredError:
+    return JSONResponse(
+        status_code=401,
+        content={"error": "Access token required"}
+    )
+```
+
+### RefreshTokenRequiredError
+
+Raised when a refresh token is required but a different token type was provided.
+
+```python
+from authx.exceptions import RefreshTokenRequiredError
+
+try:
+    payload = await auth.refresh_token_required(request)
+except RefreshTokenRequiredError:
+    return JSONResponse(
+        status_code=401,
+        content={"error": "Refresh token required"}
+    )
+```
+
+### RevokedTokenError
+
+Raised when a token has been revoked/blocked.
+
+```python
+from authx.exceptions import RevokedTokenError
+
+@auth.set_token_blocklist
+async def check_blocklist(token: str) -> bool:
+    return await redis.sismember("revoked_tokens", token)
+
+try:
+    payload = await auth.access_token_required(request)
+except RevokedTokenError:
+    return JSONResponse(
+        status_code=401,
+        content={"error": "Token has been revoked"}
+    )
+```
+
+### TokenRequiredError
+
+Raised when no valid token is present in the request.
+
+```python
+from authx.exceptions import TokenRequiredError
+
+try:
+    payload = await auth.access_token_required(request)
+except TokenRequiredError:
+    return JSONResponse(
+        status_code=401,
+        content={"error": "Valid token required"}
+    )
+```
+
+### FreshTokenRequiredError
+
+Raised when a fresh token is required but a non-fresh token was provided.
+
+```python
+from authx.exceptions import FreshTokenRequiredError
+
+try:
+    payload = await auth.fresh_token_required(request)
+except FreshTokenRequiredError:
+    return JSONResponse(
+        status_code=401,
+        content={
+            "error": "Fresh authentication required",
+            "detail": "Please log in again to perform this action"
+        }
+    )
+```
+
+<Note>
+  Fresh tokens are created during initial login. Use them to protect sensitive operations like password changes or account deletion.
+</Note>
+
+### InsufficientScopeError
+
+Raised when a token lacks the required permission scopes.
+
+**Attributes:**
+- `required` (list[str]): Scopes that were required
+- `provided` (list[str]): Scopes that were in the token
+
+```python
+from authx.exceptions import InsufficientScopeError
+
+try:
+    payload = await auth.scopes_required("admin", "users:write")(request)
+except InsufficientScopeError as e:
+    return JSONResponse(
+        status_code=403,
+        content={
+            "error": "Insufficient permissions",
+            "required_scopes": e.required,
+            "provided_scopes": e.provided
+        }
+    )
+```
+
+**Constructor:**
+
+<ParamField path="required" type="list[str]" required>
+  List of scopes that were required
+</ParamField>
+
+<ParamField path="provided" type="Optional[list[str]]" default="None">
+  List of scopes that were provided in the token
+</ParamField>
+
+<ParamField path="message" type="Optional[str]" default="None">
+  Custom error message
+</ParamField>
+
+```python
+from authx.exceptions import InsufficientScopeError
+
+# Manual creation
+raise InsufficientScopeError(
+    required=["admin", "users:write"],
+    provided=["users:read"],
+    message="You need admin access to perform this action"
+)
+```
+
+## Other exceptions
+
+### InvalidToken
+
+Raised when a token is invalid across all identity providers (multi-tenancy scenarios).
+
+**Attributes:**
+- `errors` (str): Description of validation errors
+
+```python
+from authx.exceptions import InvalidToken
+
+try:
+    # Validate token against multiple providers
+    validate_multi_tenant_token(token)
+except InvalidToken as e:
+    print(f"Token validation errors: {e.errors}")
+```
+
+## FastAPI error handlers
+
+Set up global exception handlers for AuthX exceptions:
+
+```python
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
+from authx import AuthX
+from authx.exceptions import (
+    AuthXException,
+    MissingTokenError,
+    JWTDecodeError,
+    CSRFError,
+    InsufficientScopeError,
+    FreshTokenRequiredError,
+    RevokedTokenError
+)
+
+app = FastAPI()
+auth = AuthX()
+
+@app.exception_handler(MissingTokenError)
+async def missing_token_handler(request: Request, exc: MissingTokenError):
+    return JSONResponse(
+        status_code=401,
+        content={"error": "authentication_required", "message": str(exc)}
+    )
+
+@app.exception_handler(JWTDecodeError)
+async def jwt_decode_error_handler(request: Request, exc: JWTDecodeError):
+    return JSONResponse(
+        status_code=401,
+        content={"error": "invalid_token", "message": "Token is invalid or expired"}
+    )
+
+@app.exception_handler(CSRFError)
+async def csrf_error_handler(request: Request, exc: CSRFError):
+    return JSONResponse(
+        status_code=403,
+        content={"error": "csrf_error", "message": str(exc)}
+    )
+
+@app.exception_handler(InsufficientScopeError)
+async def insufficient_scope_handler(request: Request, exc: InsufficientScopeError):
+    return JSONResponse(
+        status_code=403,
+        content={
+            "error": "insufficient_permissions",
+            "required_scopes": exc.required,
+            "provided_scopes": exc.provided
+        }
+    )
+
+@app.exception_handler(FreshTokenRequiredError)
+async def fresh_token_handler(request: Request, exc: FreshTokenRequiredError):
+    return JSONResponse(
+        status_code=401,
+        content={
+            "error": "fresh_token_required",
+            "message": "Please re-authenticate to perform this action"
+        }
+    )
+
+@app.exception_handler(RevokedTokenError)
+async def revoked_token_handler(request: Request, exc: RevokedTokenError):
+    return JSONResponse(
+        status_code=401,
+        content={"error": "token_revoked", "message": "This token has been revoked"}
+    )
+
+@app.exception_handler(AuthXException)
+async def authx_exception_handler(request: Request, exc: AuthXException):
+    # Catch-all for any other AuthX exceptions
+    return JSONResponse(
+        status_code=401,
+        content={"error": "authentication_error", "message": str(exc)}
+    )
+```
+
+## Common patterns
+
+### Granular error handling
+
+```python
+from authx.exceptions import (
+    MissingTokenError,
+    JWTDecodeError,
+    FreshTokenRequiredError,
+    InsufficientScopeError
+)
+
+@app.delete("/account")
+async def delete_account(request: Request):
+    try:
+        # Require fresh token with admin scope
+        payload = await auth.scopes_required("admin")(request)
+        if not payload.fresh:
+            raise FreshTokenRequiredError("Fresh token required")
+        
+        delete_user_account(payload.sub)
+        return {"deleted": True}
+    
+    except MissingTokenError:
+        return JSONResponse(
+            status_code=401,
+            content={"error": "Please log in to continue"}
+        )
+    except JWTDecodeError:
+        return JSONResponse(
+            status_code=401,
+            content={"error": "Your session has expired, please log in again"}
+        )
+    except FreshTokenRequiredError:
+        return JSONResponse(
+            status_code=401,
+            content={"error": "Please re-authenticate to delete your account"}
+        )
+    except InsufficientScopeError as e:
+        return JSONResponse(
+            status_code=403,
+            content={
+                "error": "You don't have permission to delete accounts",
+                "required": e.required
+            }
+        )
+```
+
+### Logging exceptions
+
+```python
+import logging
+from authx.exceptions import AuthXException, JWTDecodeError, RevokedTokenError
+
+logger = logging.getLogger(__name__)
+
+@app.get("/protected")
+async def protected_route(request: Request):
+    try:
+        payload = await auth.access_token_required(request)
+        return {"data": "sensitive"}
+    except RevokedTokenError as e:
+        logger.warning(f"Revoked token used: {e}")
+        raise
+    except JWTDecodeError as e:
+        logger.info(f"Invalid token attempt: {e}")
+        raise
+    except AuthXException as e:
+        logger.error(f"Authentication error: {e}", exc_info=True)
+        raise
+```
+
+### Custom exception messages
+
+```python
+from authx.exceptions import InsufficientScopeError
+
+def require_admin(payload: TokenPayload):
+    if not payload.has_scopes("admin"):
+        raise InsufficientScopeError(
+            required=["admin"],
+            provided=payload.scopes,
+            message="Administrator privileges required for this operation"
+        )
+
+@app.post("/admin/users")
+async def create_admin_user(
+    request: Request,
+    payload: TokenPayload = Depends(auth.ACCESS_REQUIRED)
+):
+    require_admin(payload)
+    # Create user...
+    return {"created": True}
+```

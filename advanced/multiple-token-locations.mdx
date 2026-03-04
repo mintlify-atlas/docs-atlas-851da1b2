@@ -1,0 +1,391 @@
+---
+title: Multiple token locations
+description: Accept JWT tokens from different sources like headers, cookies, JSON body, and query strings
+---
+
+AuthX supports reading JWT tokens from multiple locations in a single request, providing flexibility for different client types and use cases. You can configure which locations to check globally or override them per-endpoint.
+
+## Supported locations
+
+AuthX can extract tokens from four locations:
+
+| Location | Use case | Security |
+|----------|----------|----------|
+| `headers` | APIs, mobile apps, SPAs | High - requires explicit inclusion |
+| `cookies` | Web applications, browsers | High - HTTP-only prevents XSS |
+| `json` | Custom request bodies | Medium - requires HTTPS |
+| `query` | Public links, downloads | Low - logged in URLs |
+
+<Warning>
+Query string tokens are visible in logs, browser history, and referrer headers. Use them only for short-lived, limited-access scenarios like download links.
+</Warning>
+
+## Global configuration
+
+Configure which locations to check for tokens in your `AuthXConfig`:
+
+```python
+from authx import AuthXConfig
+
+config = AuthXConfig(
+    JWT_SECRET_KEY="your-secret-key",
+    
+    # Check multiple locations (priority: headers, cookies, json, query)
+    JWT_TOKEN_LOCATION=["headers", "cookies", "json", "query"],
+    
+    # Header settings
+    JWT_HEADER_NAME="Authorization",
+    JWT_HEADER_TYPE="Bearer",
+    
+    # Cookie settings
+    JWT_ACCESS_COOKIE_NAME="access_token_cookie",
+    JWT_REFRESH_COOKIE_NAME="refresh_token_cookie",
+    JWT_COOKIE_SECURE=True,
+    JWT_COOKIE_HTTP_ONLY=True,
+    JWT_COOKIE_CSRF_PROTECT=True,
+    
+    # JSON body settings
+    JWT_JSON_KEY="access_token",
+    JWT_REFRESH_JSON_KEY="refresh_token",
+    
+    # Query string settings
+    JWT_QUERY_STRING_NAME="token",
+)
+```
+
+## Token extraction order
+
+When multiple locations are configured, AuthX searches in the order specified:
+
+<Steps>
+  <Step title="Check first location">
+    AuthX looks for the token in the first configured location (e.g., `headers`).
+  </Step>
+  
+  <Step title="Move to next if not found">
+    If no token is found, it checks the next location (e.g., `cookies`).
+  </Step>
+  
+  <Step title="Continue until found or exhausted">
+    This continues until a token is found or all locations are checked.
+  </Step>
+  
+  <Step title="Return token or raise error">
+    Returns the first valid token found, or raises `MissingTokenError` if none exist.
+  </Step>
+</Steps>
+
+## Complete example
+
+Here's an example accepting tokens from all four locations:
+
+```python
+from fastapi import FastAPI, HTTPException, Request, Response
+from pydantic import BaseModel
+from authx import AuthX, AuthXConfig
+
+app = FastAPI()
+
+# Configure all token locations
+config = AuthXConfig(
+    JWT_SECRET_KEY="your-secret-key",
+    JWT_ALGORITHM="HS256",
+    JWT_TOKEN_LOCATION=["headers", "cookies", "json", "query"],
+    
+    # Header configuration
+    JWT_HEADER_TYPE="Bearer",
+    
+    # Cookie configuration
+    JWT_ACCESS_COOKIE_NAME="access_token_cookie",
+    JWT_COOKIE_SECURE=False,  # Set to True in production
+    JWT_COOKIE_CSRF_PROTECT=False,  # Enable in production
+    
+    # JSON body configuration
+    JWT_JSON_KEY="access_token",
+    
+    # Query string configuration
+    JWT_QUERY_STRING_NAME="token",
+)
+
+auth = AuthX(config=config)
+auth.handle_errors(app)
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+class TokenBody(BaseModel):
+    access_token: str
+
+@app.post("/login")
+def login(data: LoginRequest, response: Response):
+    """Login endpoint that returns tokens and sets cookies."""
+    # Validate credentials (simplified)
+    if data.username == "user" and data.password == "password":
+        # Create tokens
+        access_token = auth.create_access_token(uid=data.username)
+        refresh_token = auth.create_refresh_token(uid=data.username)
+        
+        # Set tokens in cookies
+        auth.set_access_cookies(access_token, response)
+        auth.set_refresh_cookies(refresh_token, response)
+        
+        # Also return tokens in response body
+        return {
+            "access_token": access_token,
+            "refresh_token": refresh_token,
+            "token_type": "bearer",
+            "message": "Tokens set in cookies and returned in response",
+        }
+    
+    raise HTTPException(status_code=401, detail="Invalid credentials")
+
+@app.get("/protected")
+async def protected_route(request: Request):
+    """Accept tokens from any configured location."""
+    try:
+        # Get token from any location
+        token = await auth.get_access_token_from_request(request)
+        payload = auth.verify_token(token, verify_csrf=False)
+        
+        return {
+            "message": "Access granted",
+            "username": payload.sub,
+            "token_location": token.location,  # Shows where token was found
+        }
+    except Exception as e:
+        raise HTTPException(status_code=401, detail=str(e))
+```
+
+### Client requests
+
+Clients can now send tokens in multiple ways:
+
+```bash
+# 1. Authorization header
+curl -H "Authorization: Bearer <token>" http://localhost:8000/protected
+
+# 2. Cookie (automatically sent by browser after login)
+curl -b "access_token_cookie=<token>" http://localhost:8000/protected
+
+# 3. JSON body
+curl -X POST \
+  -H "Content-Type: application/json" \
+  -d '{"access_token": "<token>"}' \
+  http://localhost:8000/protected
+
+# 4. Query string
+curl "http://localhost:8000/protected?token=<token>"
+```
+
+## Per-endpoint location override
+
+You can override the token location for specific endpoints:
+
+```python
+@app.get("/api/download")
+async def download_file(request: Request):
+    """Only accept tokens from query strings for download links."""
+    # Override to only check query strings
+    token = await auth.get_access_token_from_request(
+        request,
+        locations=["query"]  # Only look in query string
+    )
+    payload = auth.verify_token(token, verify_csrf=False)
+    
+    return {"file_url": f"/files/{payload.sub}/document.pdf"}
+
+@app.get("/api/strict")
+async def strict_endpoint(request: Request):
+    """Only accept tokens from headers (standard API)."""
+    # Override to only check headers
+    token = await auth.get_access_token_from_request(
+        request,
+        locations=["headers"]  # Only look in Authorization header
+    )
+    payload = auth.verify_token(token, verify_csrf=False)
+    
+    return {"message": "Strict header-only authentication", "user": payload.sub}
+
+@app.post("/api/webhook")
+async def webhook(request: Request):
+    """Accept tokens from JSON body for webhook payloads."""
+    # Override to only check JSON body
+    token = await auth.get_access_token_from_request(
+        request,
+        locations=["json"]  # Only look in JSON body
+    )
+    payload = auth.verify_token(token, verify_csrf=False)
+    
+    return {"message": "Webhook processed", "from": payload.sub}
+```
+
+<Info>
+The `locations` parameter in `get_access_token_from_request` overrides the global `JWT_TOKEN_LOCATION` configuration for that specific call.
+</Info>
+
+## Dual token location pattern
+
+A common secure pattern is using different locations for access and refresh tokens:
+
+```python
+from fastapi import FastAPI, Request, Response
+from authx import AuthX, AuthXConfig
+
+config = AuthXConfig(
+    JWT_SECRET_KEY="your-secret-key",
+    # Enable both locations
+    JWT_TOKEN_LOCATION=["headers", "cookies"],
+    
+    # Cookie settings for refresh tokens
+    JWT_REFRESH_COOKIE_NAME="refresh_token_cookie",
+    JWT_COOKIE_HTTP_ONLY=True,  # Prevent JavaScript access
+    JWT_COOKIE_SECURE=True,  # HTTPS only
+    JWT_COOKIE_CSRF_PROTECT=True,  # CSRF protection
+)
+
+auth = AuthX(config=config)
+app = FastAPI()
+auth.handle_errors(app)
+
+@app.post("/login")
+def login(username: str, password: str, response: Response):
+    """Return access token in body, refresh token in cookie."""
+    # Create tokens
+    access_token = auth.create_access_token(uid=username)
+    refresh_token = auth.create_refresh_token(uid=username)
+    
+    # Refresh token goes in HTTP-only cookie (secure)
+    auth.set_refresh_cookies(refresh_token, response)
+    
+    # Access token returned in response (client stores in memory)
+    return {"access_token": access_token, "token_type": "bearer"}
+
+@app.post("/refresh")
+async def refresh_token(request: Request):
+    """Get new access token using refresh token from cookie."""
+    # Get refresh token from cookies only
+    token = await auth.get_refresh_token_from_request(
+        request,
+        locations=["cookies"]  # Only check cookies
+    )
+    payload = auth.verify_token(token, verify_type=True)
+    
+    # Generate new access token
+    new_access_token = auth.create_access_token(uid=payload.sub)
+    
+    return {"access_token": new_access_token, "token_type": "bearer"}
+
+@app.get("/protected")
+async def protected_route(request: Request):
+    """Require access token in Authorization header."""
+    # Get access token from headers only
+    token = await auth.get_access_token_from_request(
+        request,
+        locations=["headers"]  # Only check headers
+    )
+    payload = auth.verify_token(token, verify_csrf=False)
+    
+    return {"message": "Access granted", "user": payload.sub}
+```
+
+<Tip>
+This pattern provides security benefits:
+- Access tokens in headers: No CSRF risk, works with any client
+- Refresh tokens in HTTP-only cookies: Protected from XSS, automatically included
+- Refresh tokens never leave the cookie: Reduces exposure
+</Tip>
+
+## Using dependencies
+
+You can also use AuthX dependencies with location overrides:
+
+```python
+from fastapi import Depends
+
+@app.get("/admin")
+def admin_panel(
+    # Create a custom dependency with specific locations
+    payload = Depends(auth.token_required(locations=["headers"]))
+):
+    """Admin panel requiring header-based authentication."""
+    return {
+        "message": "Admin access",
+        "user": payload.sub,
+        "admin": True,
+    }
+```
+
+## Location-specific configuration
+
+Each location has its own configuration options:
+
+### Headers
+
+```python
+config = AuthXConfig(
+    JWT_HEADER_NAME="Authorization",  # Header name
+    JWT_HEADER_TYPE="Bearer",  # Prefix (e.g., "Bearer <token>")
+)
+```
+
+### Cookies
+
+```python
+config = AuthXConfig(
+    JWT_ACCESS_COOKIE_NAME="access_token_cookie",
+    JWT_REFRESH_COOKIE_NAME="refresh_token_cookie",
+    JWT_ACCESS_COOKIE_PATH="/",
+    JWT_REFRESH_COOKIE_PATH="/",
+    JWT_COOKIE_DOMAIN=None,
+    JWT_COOKIE_SECURE=True,
+    JWT_COOKIE_HTTP_ONLY=True,
+    JWT_COOKIE_SAMESITE="lax",
+    JWT_COOKIE_CSRF_PROTECT=True,
+)
+```
+
+### JSON body
+
+```python
+config = AuthXConfig(
+    JWT_JSON_KEY="access_token",  # Key for access token in JSON
+    JWT_REFRESH_JSON_KEY="refresh_token",  # Key for refresh token
+)
+```
+
+### Query string
+
+```python
+config = AuthXConfig(
+    JWT_QUERY_STRING_NAME="token",  # Query parameter name
+)
+```
+
+## Best practices
+
+<Steps>
+  <Step title="Use headers for APIs">
+    Standard REST APIs should use Authorization headers as the primary method.
+  </Step>
+  
+  <Step title="Use cookies for web apps">
+    Browser-based applications benefit from HTTP-only cookies for automatic token handling.
+  </Step>
+  
+  <Step title="Limit query string usage">
+    Only use query strings for specific use cases like download links with short-lived tokens.
+  </Step>
+  
+  <Step title="Enable CSRF for cookies">
+    Always enable `JWT_COOKIE_CSRF_PROTECT=True` when using cookies for state-changing operations.
+  </Step>
+  
+  <Step title="Override locations when needed">
+    Use the `locations` parameter to restrict token sources for security-sensitive endpoints.
+  </Step>
+</Steps>
+
+<Warning>
+When using cookies, ensure `JWT_COOKIE_CSRF_PROTECT=True` and include CSRF tokens in POST/PUT/PATCH/DELETE requests to prevent CSRF attacks.
+</Warning>

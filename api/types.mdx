@@ -1,0 +1,465 @@
+---
+title: Type definitions
+description: Type aliases and protocols for type safety in AuthX
+---
+
+AuthX uses Python type hints extensively to provide type safety and better IDE support. This page documents the type definitions and protocols used throughout the library.
+
+## Type variables
+
+### T
+
+<ParamField path="T" type="TypeVar">
+  Generic type variable used for custom user models in AuthX
+</ParamField>
+
+```python
+from authx import AuthX
+from models import User
+
+# AuthX with custom user model
+auth = AuthX[User]()
+
+# Type-safe user retrieval
+user: User = await auth.get_current_subject(request)
+```
+
+### T_co
+
+<ParamField path="T_co" type="TypeVar" covariant>
+  Covariant type variable used in protocols
+</ParamField>
+
+## Numeric types
+
+### Numeric
+
+<ParamField path="Numeric" type="Union[float, int]">
+  Represents numeric values (float or int)
+</ParamField>
+
+```python
+from authx.types import Numeric
+
+def calculate_expiry(seconds: Numeric) -> datetime:
+    return datetime.now() + timedelta(seconds=seconds)
+```
+
+## Sequence types
+
+### ObjectOrSequence
+
+<ParamField path="ObjectOrSequence[T]" type="Union[T, Sequence[T]]">
+  Represents either a single object or a sequence of objects
+</ParamField>
+
+### StringOrSequence
+
+<ParamField path="StringOrSequence" type="Union[str, Sequence[str]]">
+  Either a single string or a sequence of strings
+</ParamField>
+
+```python
+from authx.types import StringOrSequence
+
+# Can accept either format
+audience: StringOrSequence = "https://api.example.com"
+audience: StringOrSequence = ["https://api.example.com", "https://app.example.com"]
+
+token = auth.create_access_token(
+    uid="user123",
+    audience=audience  # Works with both single string and list
+)
+```
+
+## DateTime types
+
+### DateTimeExpression
+
+<ParamField path="DateTimeExpression" type="Union[datetime.datetime, datetime.timedelta]">
+  Represents time as either an absolute datetime or a relative timedelta
+</ParamField>
+
+```python
+from datetime import datetime, timedelta, timezone
+from authx.types import DateTimeExpression
+
+# Absolute time
+expiry: DateTimeExpression = datetime(2026, 12, 31, tzinfo=timezone.utc)
+token = auth.create_access_token(uid="user123", expiry=expiry)
+
+# Relative time
+expiry: DateTimeExpression = timedelta(hours=2)
+token = auth.create_access_token(uid="user123", expiry=expiry)
+```
+
+## JWT algorithm types
+
+### SymmetricAlgorithmType
+
+<ParamField path="SymmetricAlgorithmType" type="Literal['HS256', 'HS384', 'HS512']">
+  HMAC-based symmetric encryption algorithms
+</ParamField>
+
+```python
+from authx import AuthXConfig
+from authx.types import SymmetricAlgorithmType
+
+algo: SymmetricAlgorithmType = "HS256"
+
+config = AuthXConfig(
+    JWT_ALGORITHM=algo,
+    JWT_SECRET_KEY="your-secret-key"
+)
+```
+
+### AsymmetricAlgorithmType
+
+<ParamField path="AsymmetricAlgorithmType" type="Literal">
+  RSA and ECDSA-based asymmetric encryption algorithms:
+  - RSA: `RS256`, `RS384`, `RS512`, `PS256`, `PS384`, `PS512`
+  - ECDSA: `ES256`, `ES256K`, `ES384`, `ES512`
+</ParamField>
+
+```python
+from authx.types import AsymmetricAlgorithmType
+
+algo: AsymmetricAlgorithmType = "RS256"
+
+config = AuthXConfig(
+    JWT_ALGORITHM=algo,
+    JWT_PRIVATE_KEY=private_key,
+    JWT_PUBLIC_KEY=public_key
+)
+```
+
+### AlgorithmType
+
+<ParamField path="AlgorithmType" type="Union[SymmetricAlgorithmType, AsymmetricAlgorithmType]">
+  Any supported JWT signing algorithm
+</ParamField>
+
+```python
+from authx.types import AlgorithmType
+
+def create_config(algorithm: AlgorithmType):
+    return AuthXConfig(JWT_ALGORITHM=algorithm)
+
+# Works with any algorithm
+config1 = create_config("HS256")
+config2 = create_config("RS256")
+config3 = create_config("ES256")
+```
+
+## HTTP types
+
+### HTTPMethod
+
+<ParamField path="HTTPMethod" type="Literal['GET', 'HEAD', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH']">
+  Standard HTTP request methods
+</ParamField>
+
+### HTTPMethods
+
+<ParamField path="HTTPMethods" type="Sequence[HTTPMethod]">
+  A sequence of HTTP methods
+</ParamField>
+
+```python
+from authx import AuthXConfig
+from authx.types import HTTPMethods
+
+csrf_methods: HTTPMethods = ["POST", "PUT", "PATCH", "DELETE"]
+
+config = AuthXConfig(
+    JWT_CSRF_METHODS=csrf_methods
+)
+```
+
+### SameSitePolicy
+
+<ParamField path="SameSitePolicy" type="Literal['lax', 'strict', 'none']">
+  Cookie SameSite attribute values for CSRF protection
+</ParamField>
+
+```python
+from authx.types import SameSitePolicy
+
+policy: SameSitePolicy = "strict"
+
+config = AuthXConfig(
+    JWT_COOKIE_SAMESITE=policy
+)
+```
+
+## Token types
+
+### TokenType
+
+<ParamField path="TokenType" type="Literal['access', 'refresh']">
+  Type of JWT token
+</ParamField>
+
+```python
+from authx.types import TokenType
+
+async def get_token(request: Request, token_type: TokenType):
+    return await auth.get_token_from_request(
+        request,
+        type=token_type
+    )
+
+access = await get_token(request, "access")
+refresh = await get_token(request, "refresh")
+```
+
+### TokenLocation
+
+<ParamField path="TokenLocation" type="Literal['headers', 'cookies', 'json', 'query']">
+  Location where tokens can be found in requests
+</ParamField>
+
+### TokenLocations
+
+<ParamField path="TokenLocations" type="Sequence[TokenLocation]">
+  Multiple token locations
+</ParamField>
+
+```python
+from authx import AuthXConfig
+from authx.types import TokenLocations
+
+locations: TokenLocations = ["headers", "cookies"]
+
+config = AuthXConfig(
+    JWT_TOKEN_LOCATION=locations
+)
+
+# Search specific locations
+token = await auth.get_token_from_request(
+    request,
+    locations=["headers"]  # Only search headers
+)
+```
+
+## Protocol types
+
+Protocols define the interface for callback functions used in AuthX.
+
+### TokenCallback
+
+Protocol for token blocklist check functions.
+
+```python
+from authx.types import TokenCallback
+from typing import Awaitable, Union
+
+# Synchronous callback
+def check_blocklist(token: str) -> bool:
+    return token in blocked_tokens
+
+# Asynchronous callback
+async def check_blocklist_async(token: str) -> bool:
+    return await database.is_token_blocked(token)
+
+# Both match the TokenCallback protocol
+callback: TokenCallback = check_blocklist
+callback: TokenCallback = check_blocklist_async
+```
+
+**Signature:**
+```python
+def __call__(self, token: str, **kwargs: Any) -> Union[bool, Awaitable[bool]]
+```
+
+<Note>
+  TokenCallback supports both synchronous and asynchronous functions.
+</Note>
+
+### ModelCallback
+
+Protocol for user/subject retrieval functions.
+
+```python
+from authx.types import ModelCallback
+from typing import Optional
+from models import User
+
+# Synchronous callback
+def get_user(uid: str) -> Optional[User]:
+    return database.get_user_by_id(uid)
+
+# Asynchronous callback
+async def get_user_async(uid: str) -> Optional[User]:
+    return await database.query_user(uid)
+
+# Both match the ModelCallback protocol
+callback: ModelCallback[User] = get_user
+callback: ModelCallback[User] = get_user_async
+```
+
+**Signature:**
+```python
+def __call__(self, uid: str, **kwargs: Any) -> Union[Optional[T_co], Awaitable[Optional[T_co]]]
+```
+
+<Note>
+  ModelCallback is generic and type-safe. It preserves your user model type.
+</Note>
+
+## Usage examples
+
+### Type-safe configuration
+
+```python
+from datetime import timedelta
+from authx import AuthXConfig
+from authx.types import (
+    AlgorithmType,
+    TokenLocations,
+    HTTPMethods,
+    SameSitePolicy
+)
+
+algorithm: AlgorithmType = "HS256"
+locations: TokenLocations = ["headers", "cookies"]
+csrf_methods: HTTPMethods = ["POST", "PUT", "DELETE"]
+samesite: SameSitePolicy = "lax"
+
+config = AuthXConfig(
+    JWT_ALGORITHM=algorithm,
+    JWT_TOKEN_LOCATION=locations,
+    JWT_CSRF_METHODS=csrf_methods,
+    JWT_COOKIE_SAMESITE=samesite,
+    JWT_SECRET_KEY="your-secret-key"
+)
+```
+
+### Type-safe token creation
+
+```python
+from datetime import timedelta, datetime, timezone
+from authx.types import DateTimeExpression, StringOrSequence
+
+# Using timedelta
+expiry: DateTimeExpression = timedelta(hours=1)
+token = auth.create_access_token(uid="user123", expiry=expiry)
+
+# Using datetime
+expiry: DateTimeExpression = datetime(2026, 12, 31, tzinfo=timezone.utc)
+token = auth.create_access_token(uid="user123", expiry=expiry)
+
+# Single audience
+audience: StringOrSequence = "https://api.example.com"
+token = auth.create_access_token(uid="user123", audience=audience)
+
+# Multiple audiences
+audience: StringOrSequence = [
+    "https://api.example.com",
+    "https://app.example.com"
+]
+token = auth.create_access_token(uid="user123", audience=audience)
+```
+
+### Type-safe callbacks
+
+```python
+from typing import Optional
+from authx import AuthX
+from authx.types import TokenCallback, ModelCallback
+from models import User
+
+auth = AuthX[User]()
+
+# Token blocklist callback
+@auth.set_token_blocklist
+async def check_token_blocklist(token: str) -> bool:
+    return await redis.sismember("token_blocklist", token)
+
+# Type hint is optional but helps with IDE support
+blocklist_check: TokenCallback = check_token_blocklist
+
+# Subject getter callback
+@auth.set_subject_getter
+async def get_user_from_uid(uid: str) -> Optional[User]:
+    return await database.get_user(uid)
+
+# Type hint with generic preserves User type
+user_getter: ModelCallback[User] = get_user_from_uid
+```
+
+### Type-safe token retrieval
+
+```python
+from fastapi import Request
+from authx.types import TokenType, TokenLocations
+
+async def get_token_dynamically(
+    request: Request,
+    token_type: TokenType,
+    search_locations: TokenLocations
+):
+    token = await auth.get_token_from_request(
+        request,
+        type=token_type,
+        locations=search_locations,
+        optional=False
+    )
+    return token
+
+# Type-safe calls
+access_token = await get_token_dynamically(
+    request,
+    token_type="access",
+    search_locations=["headers", "cookies"]
+)
+
+refresh_token = await get_token_dynamically(
+    request,
+    token_type="refresh",
+    search_locations=["cookies"]
+)
+```
+
+### Custom type-safe wrapper
+
+```python
+from typing import Optional
+from authx import AuthX
+from authx.types import (
+    AlgorithmType,
+    DateTimeExpression,
+    StringOrSequence
+)
+from models import User
+
+class TypedAuthManager:
+    def __init__(self, auth: AuthX[User]):
+        self.auth = auth
+    
+    def create_token_for_user(
+        self,
+        user: User,
+        expiry: DateTimeExpression,
+        audience: Optional[StringOrSequence] = None,
+        scopes: Optional[list[str]] = None
+    ) -> str:
+        return self.auth.create_access_token(
+            uid=str(user.id),
+            expiry=expiry,
+            audience=audience,
+            scopes=scopes,
+            data={"username": user.username}
+        )
+
+# Usage
+auth = AuthX[User]()
+manager = TypedAuthManager(auth)
+
+token = manager.create_token_for_user(
+    user=current_user,
+    expiry=timedelta(hours=1),
+    audience="https://api.example.com",
+    scopes=["users:read", "posts:write"]
+)
+```

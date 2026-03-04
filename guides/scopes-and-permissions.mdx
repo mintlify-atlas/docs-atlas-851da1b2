@@ -1,0 +1,519 @@
+---
+title: Scopes and permissions
+description: Implement fine-grained access control with token scopes and hierarchical permissions
+---
+
+Scopes provide fine-grained access control by defining what actions a token is authorized to perform. AuthX supports simple scopes, hierarchical scopes with wildcard matching, and flexible AND/OR logic for permission checks.
+
+## Understanding scopes
+
+Scopes are strings that represent permissions:
+
+- **Simple scopes**: `read`, `write`, `admin`
+- **Hierarchical scopes**: `users:read`, `posts:write`, `admin:settings`
+- **Wildcard scopes**: `admin:*` matches any scope under the `admin` namespace
+
+<Info>
+  Scopes are stored in the JWT token, making them fast to check without database queries. However, they cannot be updated without issuing a new token.
+</Info>
+
+## Adding scopes to tokens
+
+Include scopes when creating tokens:
+
+```python
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+from authx import AuthX, AuthXConfig
+
+app = FastAPI()
+
+auth_config = AuthXConfig(
+    JWT_ALGORITHM="HS256",
+    JWT_SECRET_KEY="your-secret-key",
+    JWT_TOKEN_LOCATION=["headers"],
+)
+
+auth = AuthX(config=auth_config)
+auth.handle_errors(app)
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+# Define user roles and their scopes
+USERS = {
+    "admin": {
+        "password": "admin123",
+        "scopes": ["admin:*"],  # Full admin access
+    },
+    "editor": {
+        "password": "editor123",
+        "scopes": ["posts:read", "posts:write", "posts:delete"],
+    },
+    "viewer": {
+        "password": "viewer123",
+        "scopes": ["posts:read", "users:read"],
+    },
+}
+
+@app.post("/login")
+def login(data: LoginRequest):
+    """Login and receive a token with user's scopes."""
+    if data.username not in USERS:
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+    
+    user = USERS[data.username]
+    if user["password"] != data.password:
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+    
+    # Create token with user's scopes
+    access_token = auth.create_access_token(
+        uid=data.username,
+        scopes=user["scopes"]
+    )
+    
+    return {
+        "access_token": access_token,
+        "token_type": "bearer",
+        "scopes": user["scopes"]
+    }
+```
+
+## Protecting routes with scopes
+
+### Single scope requirement
+
+Require a specific scope to access an endpoint:
+
+```python
+from typing import Annotated
+from fastapi import Depends
+from authx.schema import TokenPayload
+
+@app.get("/posts")
+async def list_posts(
+    payload: Annotated[TokenPayload, Depends(auth.scopes_required("posts:read"))]
+):
+    """List posts - requires 'posts:read' scope."""
+    return {
+        "message": "Posts retrieved successfully",
+        "user": payload.sub,
+        "scopes": payload.scopes,
+    }
+
+@app.post("/posts")
+async def create_post(
+    payload: Annotated[TokenPayload, Depends(auth.scopes_required("posts:write"))]
+):
+    """Create a post - requires 'posts:write' scope."""
+    return {
+        "message": "Post created successfully",
+        "user": payload.sub,
+    }
+```
+
+### Multiple scopes (AND logic)
+
+Require ALL specified scopes:
+
+```python
+@app.delete("/posts/{post_id}")
+async def delete_post(
+    post_id: int,
+    payload: Annotated[
+        TokenPayload,
+        Depends(auth.scopes_required("posts:read", "posts:delete"))
+    ],
+):
+    """Delete a post - requires BOTH 'posts:read' AND 'posts:delete'."""
+    return {
+        "message": f"Post {post_id} deleted",
+        "user": payload.sub,
+    }
+```
+
+### Multiple scopes (OR logic)
+
+Require ANY of the specified scopes:
+
+```python
+@app.get("/moderate")
+async def moderate_content(
+    payload: Annotated[
+        TokenPayload,
+        Depends(
+            auth.scopes_required(
+                "admin:*",
+                "moderator",
+                all_required=False  # OR logic
+            )
+        ),
+    ],
+):
+    """Moderate content - requires 'admin:*' OR 'moderator' scope."""
+    return {
+        "message": "Moderation access granted",
+        "user": payload.sub,
+    }
+```
+
+## Wildcard scopes
+
+Use wildcards for namespace-level permissions:
+
+```python
+# User with "admin:*" scope can access all admin resources
+@app.get("/admin/dashboard")
+async def admin_dashboard(
+    payload: Annotated[TokenPayload, Depends(auth.scopes_required("admin:*"))]
+):
+    """Admin dashboard - requires 'admin:*' scope."""
+    return {"message": "Welcome to admin dashboard"}
+
+@app.get("/admin/users")
+async def admin_users(
+    payload: Annotated[TokenPayload, Depends(auth.scopes_required("admin:users"))]
+):
+    """Admin users - requires 'admin:users' scope.
+    
+    Note: A user with 'admin:*' will also have access due to wildcard matching.
+    """
+    return {"message": "Admin users page"}
+
+@app.get("/admin/settings")
+async def admin_settings(
+    payload: Annotated[TokenPayload, Depends(auth.scopes_required("admin:settings"))]
+):
+    """Admin settings - requires 'admin:settings' scope.
+    
+    Note: A user with 'admin:*' will also have access due to wildcard matching.
+    """
+    return {"message": "Admin settings page"}
+```
+
+<Tip>
+  Wildcard scopes like `admin:*` match any scope under that namespace:
+  - `admin:*` matches `admin:users`, `admin:settings`, `admin:reports`, etc.
+  - Wildcards only work at the end: `admin:*` is valid, `*:admin` is not
+</Tip>
+
+## Manual scope checking
+
+Check scopes programmatically within your route:
+
+```python
+@app.get("/profile")
+async def get_profile(payload: TokenPayload = auth.ACCESS_REQUIRED):
+    """Profile with conditional features based on scopes."""
+    profile = {
+        "username": payload.sub,
+        "scopes": payload.scopes,
+    }
+    
+    # Manually check for additional features
+    if payload.has_scopes("users:write"):
+        profile["can_edit_profile"] = True
+    
+    if payload.has_scopes("admin:*"):
+        profile["is_admin"] = True
+    
+    # OR logic: check if user has any of the scopes
+    if payload.has_scopes("admin", "moderator", all_required=False):
+        profile["can_moderate"] = True
+    
+    return profile
+```
+
+## Type-safe scope dependencies
+
+Create reusable typed dependencies:
+
+```python
+from typing import Annotated
+from fastapi import Depends
+from authx.schema import TokenPayload
+
+# Define type aliases for common scope requirements
+AdminRequired = Annotated[
+    TokenPayload,
+    Depends(auth.scopes_required("admin:*"))
+]
+
+PostsReadRequired = Annotated[
+    TokenPayload,
+    Depends(auth.scopes_required("posts:read"))
+]
+
+PostsWriteRequired = Annotated[
+    TokenPayload,
+    Depends(auth.scopes_required("posts:write"))
+]
+
+PostsDeleteRequired = Annotated[
+    TokenPayload,
+    Depends(auth.scopes_required("posts:read", "posts:delete"))
+]
+
+# Use in routes
+@app.get("/posts")
+async def list_posts(payload: PostsReadRequired):
+    """List posts."""
+    return {"message": "Posts retrieved"}
+
+@app.post("/posts")
+async def create_post(payload: PostsWriteRequired):
+    """Create a post."""
+    return {"message": "Post created"}
+
+@app.delete("/posts/{id}")
+async def delete_post(id: int, payload: PostsDeleteRequired):
+    """Delete a post."""
+    return {"message": f"Post {id} deleted"}
+
+@app.get("/admin/dashboard")
+async def admin_dashboard(payload: AdminRequired):
+    """Admin dashboard."""
+    return {"message": "Admin dashboard"}
+```
+
+## Error handling
+
+Handle insufficient scope errors:
+
+```python
+from authx.exceptions import InsufficientScopeError
+from fastapi import Request
+from fastapi.responses import JSONResponse
+
+@app.exception_handler(InsufficientScopeError)
+async def insufficient_scope_handler(
+    request: Request,
+    exc: InsufficientScopeError
+):
+    """Custom handler for insufficient scope errors."""
+    return JSONResponse(
+        status_code=403,
+        content={
+            "error": "insufficient_scope",
+            "message": str(exc),
+            "required_scopes": exc.required,
+            "provided_scopes": exc.provided,
+        },
+    )
+```
+
+When a user lacks required scopes:
+
+```json
+{
+  "error": "insufficient_scope",
+  "message": "Missing required scopes: ['posts:delete']. Provided: ['posts:read', 'posts:write']",
+  "required_scopes": ["posts:read", "posts:delete"],
+  "provided_scopes": ["posts:read", "posts:write"]
+}
+```
+
+## Combining with fresh tokens
+
+Combine scope and freshness requirements:
+
+```python
+@app.post("/admin/delete-user")
+async def delete_user(
+    user_id: int,
+    payload: Annotated[
+        TokenPayload,
+        Depends(
+            auth.scopes_required(
+                "admin:*",
+                verify_fresh=True  # Require fresh token AND admin scope
+            )
+        ),
+    ],
+):
+    """Delete user - requires fresh token with admin:* scope."""
+    return {"message": f"User {user_id} deleted"}
+```
+
+## Dynamic scopes
+
+Load scopes from a database:
+
+```python
+async def get_user_scopes(username: str) -> list[str]:
+    """Fetch user scopes from database."""
+    # Query database for user permissions
+    user = await db.users.find_one({"username": username})
+    return user.get("scopes", [])
+
+@app.post("/login")
+async def login(data: LoginRequest):
+    """Login with dynamic scopes from database."""
+    if data.username not in USERS:
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+    
+    # Fetch scopes from database
+    scopes = await get_user_scopes(data.username)
+    
+    # Create token with dynamic scopes
+    access_token = auth.create_access_token(
+        uid=data.username,
+        scopes=scopes
+    )
+    
+    return {
+        "access_token": access_token,
+        "token_type": "bearer",
+        "scopes": scopes
+    }
+```
+
+## Complete example
+
+```python
+from typing import Annotated
+from fastapi import FastAPI, HTTPException, Depends
+from pydantic import BaseModel
+from authx import AuthX, AuthXConfig, InsufficientScopeError
+from authx.schema import TokenPayload
+
+app = FastAPI(title="Scopes Example")
+
+auth_config = AuthXConfig(
+    JWT_ALGORITHM="HS256",
+    JWT_SECRET_KEY="your-secret-key",
+    JWT_TOKEN_LOCATION=["headers"],
+)
+
+auth = AuthX(config=auth_config)
+auth.handle_errors(app)
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+# Users with different permission levels
+USERS = {
+    "admin": {
+        "password": "admin123",
+        "scopes": ["admin:*"],
+    },
+    "editor": {
+        "password": "editor123",
+        "scopes": ["posts:read", "posts:write", "posts:delete"],
+    },
+    "viewer": {
+        "password": "viewer123",
+        "scopes": ["posts:read", "users:read"],
+    },
+}
+
+# Type aliases
+PostsReadRequired = Annotated[
+    TokenPayload,
+    Depends(auth.scopes_required("posts:read"))
+]
+
+PostsWriteRequired = Annotated[
+    TokenPayload,
+    Depends(auth.scopes_required("posts:write"))
+]
+
+AdminRequired = Annotated[
+    TokenPayload,
+    Depends(auth.scopes_required("admin:*"))
+]
+
+@app.post("/login")
+def login(data: LoginRequest):
+    """Login and receive token with scopes."""
+    if data.username not in USERS:
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+    
+    user = USERS[data.username]
+    if user["password"] != data.password:
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+    
+    access_token = auth.create_access_token(
+        uid=data.username,
+        scopes=user["scopes"]
+    )
+    
+    return {
+        "access_token": access_token,
+        "token_type": "bearer",
+        "scopes": user["scopes"],
+    }
+
+@app.get("/posts")
+async def list_posts(payload: PostsReadRequired):
+    """List posts - requires 'posts:read'."""
+    return {"message": "Posts retrieved", "user": payload.sub}
+
+@app.post("/posts")
+async def create_post(payload: PostsWriteRequired):
+    """Create post - requires 'posts:write'."""
+    return {"message": "Post created", "user": payload.sub}
+
+@app.delete("/posts/{id}")
+async def delete_post(
+    id: int,
+    payload: Annotated[
+        TokenPayload,
+        Depends(auth.scopes_required("posts:read", "posts:delete"))
+    ],
+):
+    """Delete post - requires 'posts:read' AND 'posts:delete'."""
+    return {"message": f"Post {id} deleted"}
+
+@app.get("/admin/dashboard")
+async def admin_dashboard(payload: AdminRequired):
+    """Admin dashboard - requires 'admin:*'."""
+    return {"message": "Admin dashboard", "user": payload.sub}
+
+@app.get("/profile")
+async def get_profile(payload: TokenPayload = auth.ACCESS_REQUIRED):
+    """Profile with conditional features."""
+    profile = {
+        "username": payload.sub,
+        "scopes": payload.scopes,
+    }
+    
+    if payload.has_scopes("admin:*"):
+        profile["is_admin"] = True
+    
+    return profile
+```
+
+## Best practices
+
+<Note>
+  **Recommendations for scopes:**
+  
+  - Use hierarchical scopes with colons: `resource:action` (e.g., `posts:write`)
+  - Grant minimal necessary scopes (principle of least privilege)
+  - Use wildcards for administrative roles: `admin:*`
+  - Store scopes in the token for fast checks without database queries
+  - Remember scopes cannot be updated without issuing a new token
+  - Combine scopes with fresh tokens for sensitive operations
+  - Use type aliases for commonly used scope requirements
+  - Document your scope hierarchy and what each scope grants
+</Note>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Fresh tokens" icon="sparkles" href="/guides/fresh-tokens">
+    Combine scopes with freshness requirements
+  </Card>
+  <Card title="Token revocation" icon="ban" href="/guides/token-revocation">
+    Revoke tokens when permissions change
+  </Card>
+  <Card title="Error handling" icon="triangle-exclamation" href="/guides/error-handling">
+    Handle insufficient scope errors
+  </Card>
+  <Card title="Custom callbacks" icon="code" href="/guides/custom-callbacks">
+    Implement custom permission logic
+  </Card>
+</CardGroup>

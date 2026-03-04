@@ -1,0 +1,578 @@
+---
+title: CSRF protection
+description: Protect your cookie-based authentication from Cross-Site Request Forgery attacks
+---
+
+Cross-Site Request Forgery (CSRF) is an attack that tricks authenticated users into performing unwanted actions. When using cookie-based authentication, CSRF protection is essential because browsers automatically include cookies in requests.
+
+## Understanding CSRF attacks
+
+Here's how a CSRF attack works:
+
+<Steps>
+  <Step title="User logs in">
+    User authenticates and receives a token stored in an HTTP-only cookie.
+  </Step>
+  
+  <Step title="User visits malicious site">
+    While still logged in, the user visits a malicious website.
+  </Step>
+  
+  <Step title="Malicious request">
+    The malicious site makes a request to your API. The browser automatically includes the authentication cookie.
+  </Step>
+  
+  <Step title="Unwanted action">
+    Your API processes the request as legitimate because it has a valid cookie, performing an action the user didn't intend.
+  </Step>
+</Steps>
+
+<Warning>
+  Without CSRF protection, any website can make authenticated requests to your API on behalf of logged-in users.
+</Warning>
+
+## How AuthX prevents CSRF
+
+AuthX uses the **double submit cookie** pattern:
+
+<Steps>
+  <Step title="Server generates CSRF token">
+    When creating a JWT, AuthX generates a unique CSRF token and includes it in the JWT claims.
+  </Step>
+  
+  <Step title="Two cookies are set">
+    The server sets two cookies:
+    - JWT cookie (HTTP-only, not accessible to JavaScript)
+    - CSRF token cookie (readable by JavaScript)
+  </Step>
+  
+  <Step title="Client includes CSRF token">
+    For state-changing requests (POST, PUT, DELETE), the client reads the CSRF token cookie and includes it in a request header.
+  </Step>
+  
+  <Step title="Server validates">
+    The server compares the CSRF token from the header with the one inside the JWT. Both must match.
+  </Step>
+</Steps>
+
+<Info>
+  Malicious sites can trigger requests with cookies, but they cannot read cookies from your domain due to same-origin policy. Therefore, they cannot include the CSRF token in the header.
+</Info>
+
+## Configuration
+
+Enable CSRF protection in your AuthX config:
+
+```python
+from authx import AuthX, AuthXConfig
+
+auth_config = AuthXConfig(
+    JWT_ALGORITHM="HS256",
+    JWT_SECRET_KEY="your-secret-key",
+    JWT_TOKEN_LOCATION=["cookies"],
+    
+    # Enable CSRF protection
+    JWT_COOKIE_CSRF_PROTECT=True,
+    
+    # Store CSRF token in a separate cookie (default: True)
+    JWT_CSRF_IN_COOKIES=True,
+    
+    # Methods that require CSRF validation
+    JWT_CSRF_METHODS=["POST", "PUT", "PATCH", "DELETE"],
+    
+    # CSRF token cookie names
+    JWT_ACCESS_CSRF_COOKIE_NAME="csrf_access_token",
+    JWT_REFRESH_CSRF_COOKIE_NAME="csrf_refresh_token",
+    
+    # CSRF token header names
+    JWT_ACCESS_CSRF_HEADER_NAME="X-CSRF-TOKEN",
+    JWT_REFRESH_CSRF_HEADER_NAME="X-CSRF-TOKEN",
+    
+    # Cookie paths for CSRF tokens
+    JWT_ACCESS_CSRF_COOKIE_PATH="/",
+    JWT_REFRESH_CSRF_COOKIE_PATH="/",
+    
+    # Optional: Check form data for CSRF token
+    JWT_CSRF_CHECK_FORM=False,
+    JWT_ACCESS_CSRF_FIELD_NAME="csrf_token",
+    JWT_REFRESH_CSRF_FIELD_NAME="csrf_token",
+)
+
+auth = AuthX(config=auth_config)
+```
+
+## Automatic CSRF validation
+
+AuthX automatically validates CSRF tokens for configured methods:
+
+```python
+from fastapi import FastAPI, Response
+from authx.schema import TokenPayload
+
+app = FastAPI()
+auth.handle_errors(app)
+
+# GET requests don't require CSRF token
+@app.get("/protected")
+async def get_data(payload: TokenPayload = auth.ACCESS_REQUIRED):
+    """GET request - no CSRF validation needed."""
+    return {"message": "Data retrieved", "user": payload.sub}
+
+# POST requests automatically validate CSRF token
+@app.post("/posts")
+async def create_post(payload: TokenPayload = auth.ACCESS_REQUIRED):
+    """POST request - CSRF token automatically validated."""
+    return {"message": "Post created", "user": payload.sub}
+
+# PUT/PATCH/DELETE also require CSRF token
+@app.delete("/posts/{post_id}")
+async def delete_post(post_id: int, payload: TokenPayload = auth.ACCESS_REQUIRED):
+    """DELETE request - CSRF token automatically validated."""
+    return {"message": f"Post {post_id} deleted"}
+```
+
+<Tip>
+  GET requests are considered safe operations and don't require CSRF validation. Only state-changing operations (POST, PUT, PATCH, DELETE) need CSRF protection.
+</Tip>
+
+## Client-side implementation
+
+Clients must read the CSRF token from the cookie and include it in request headers:
+
+<CodeGroup>
+
+```javascript Fetch API
+// Helper function to read cookies
+function getCookie(name) {
+    const value = `; ${document.cookie}`;
+    const parts = value.split(`; ${name}=`);
+    if (parts.length === 2) return parts.pop().split(';').shift();
+}
+
+// GET request - no CSRF token needed
+async function getData() {
+    const response = await fetch('http://localhost:8000/protected', {
+        credentials: 'include'  // Include cookies
+    });
+    return response.json();
+}
+
+// POST request - include CSRF token
+async function createPost(title, content) {
+    // Read CSRF token from cookie
+    const csrfToken = getCookie('csrf_access_token');
+    
+    const response = await fetch('http://localhost:8000/posts', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'X-CSRF-TOKEN': csrfToken  // Include CSRF token
+        },
+        credentials: 'include',  // Include cookies
+        body: JSON.stringify({title, content})
+    });
+    return response.json();
+}
+
+// DELETE request - include CSRF token
+async function deletePost(postId) {
+    const csrfToken = getCookie('csrf_access_token');
+    
+    const response = await fetch(`http://localhost:8000/posts/${postId}`, {
+        method: 'DELETE',
+        headers: {
+            'X-CSRF-TOKEN': csrfToken
+        },
+        credentials: 'include'
+    });
+    return response.json();
+}
+```
+
+```python Python (httpx)
+import httpx
+
+client = httpx.Client()
+
+# Login
+response = client.post(
+    "http://localhost:8000/login",
+    json={"username": "user1", "password": "password1"}
+)
+
+# GET request - no CSRF token needed
+response = client.get("http://localhost:8000/protected")
+
+# POST request - include CSRF token from cookie
+csrf_token = client.cookies.get("csrf_access_token")
+response = client.post(
+    "http://localhost:8000/posts",
+    json={"title": "New Post"},
+    headers={"X-CSRF-TOKEN": csrf_token}
+)
+
+# DELETE request - include CSRF token
+response = client.delete(
+    "http://localhost:8000/posts/1",
+    headers={"X-CSRF-TOKEN": csrf_token}
+)
+```
+
+```typescript Axios
+import axios from 'axios';
+
+// Configure axios to include credentials
+axios.defaults.withCredentials = true;
+
+// Helper to get CSRF token
+function getCsrfToken(): string | null {
+    const name = 'csrf_access_token';
+    const value = `; ${document.cookie}`;
+    const parts = value.split(`; ${name}=`);
+    if (parts.length === 2) {
+        return parts.pop()?.split(';').shift() || null;
+    }
+    return null;
+}
+
+// GET request
+const getData = async () => {
+    const response = await axios.get('http://localhost:8000/protected');
+    return response.data;
+};
+
+// POST request with CSRF token
+const createPost = async (title: string, content: string) => {
+    const csrfToken = getCsrfToken();
+    
+    const response = await axios.post(
+        'http://localhost:8000/posts',
+        {title, content},
+        {
+            headers: {
+                'X-CSRF-TOKEN': csrfToken
+            }
+        }
+    );
+    return response.data;
+};
+```
+
+</CodeGroup>
+
+## CSRF with form data
+
+You can also include the CSRF token in form data:
+
+```python
+auth_config = AuthXConfig(
+    JWT_CSRF_CHECK_FORM=True,  # Enable form field checking
+    JWT_ACCESS_CSRF_FIELD_NAME="csrf_token",
+)
+```
+
+HTML form:
+
+```html
+<form action="/posts" method="POST">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input type="text" name="title" placeholder="Post title">
+    <textarea name="content" placeholder="Post content"></textarea>
+    <button type="submit">Create Post</button>
+</form>
+```
+
+## Disabling CSRF for specific routes
+
+Disable CSRF validation when needed:
+
+```python
+from fastapi import Request
+
+@app.post("/webhook")
+async def webhook(request: Request):
+    """Webhook endpoint - CSRF not applicable for external calls."""
+    # Manually get and verify token without CSRF
+    token = await auth.get_access_token_from_request(request)
+    payload = auth.verify_token(token, verify_csrf=False)
+    
+    return {"message": "Webhook processed", "user": payload.sub}
+
+@app.post("/api/public-action")
+async def public_action(request: Request):
+    """Public endpoint that doesn't use cookies."""
+    # If not using cookies, no CSRF needed
+    token = await auth.get_access_token_from_request(
+        request,
+        locations=["headers"]  # Only check headers, not cookies
+    )
+    payload = auth.verify_token(token, verify_csrf=False)
+    
+    return {"message": "Action completed"}
+```
+
+<Warning>
+  Only disable CSRF verification when you're certain the request is not vulnerable to CSRF attacks (e.g., webhooks, header-based auth).
+</Warning>
+
+## CSRF with refresh tokens
+
+Refresh tokens also support CSRF protection:
+
+```python
+from fastapi import Request, Response
+
+@app.post("/refresh")
+async def refresh_token(request: Request, response: Response):
+    """Refresh endpoint with CSRF protection."""
+    # CSRF is automatically validated for POST requests
+    refresh_token = await auth.get_refresh_token_from_request(request)
+    payload = auth.verify_token(refresh_token, verify_type=True)
+    
+    # Create new access token
+    new_access_token = auth.create_access_token(uid=payload.sub)
+    auth.set_access_cookies(new_access_token, response)
+    
+    return {"message": "Token refreshed"}
+```
+
+Client includes CSRF token:
+
+```javascript
+async function refreshToken() {
+    // Use the CSRF token from the refresh token cookie
+    const csrfToken = getCookie('csrf_refresh_token');
+    
+    const response = await fetch('http://localhost:8000/refresh', {
+        method: 'POST',
+        headers: {
+            'X-CSRF-TOKEN': csrfToken  // Must match refresh token's CSRF
+        },
+        credentials: 'include'
+    });
+    return response.json();
+}
+```
+
+## Error handling
+
+Handle CSRF errors:
+
+```python
+from authx.exceptions import CSRFError, MissingCSRFTokenError
+from fastapi import Request
+from fastapi.responses import JSONResponse
+
+@app.exception_handler(CSRFError)
+async def csrf_error_handler(request: Request, exc: CSRFError):
+    """Handle CSRF validation errors."""
+    return JSONResponse(
+        status_code=401,
+        content={
+            "error": "csrf_error",
+            "message": str(exc),
+            "hint": "Include X-CSRF-TOKEN header with the value from csrf_access_token cookie"
+        },
+    )
+
+@app.exception_handler(MissingCSRFTokenError)
+async def missing_csrf_handler(request: Request, exc: MissingCSRFTokenError):
+    """Handle missing CSRF token errors."""
+    return JSONResponse(
+        status_code=401,
+        content={
+            "error": "missing_csrf_token",
+            "message": str(exc),
+            "hint": "Read csrf_access_token cookie and include in X-CSRF-TOKEN header"
+        },
+    )
+```
+
+When CSRF validation fails:
+
+```json
+{
+  "error": "csrf_error",
+  "message": "CSRF token mismatch",
+  "hint": "Include X-CSRF-TOKEN header with the value from csrf_access_token cookie"
+}
+```
+
+## SameSite attribute
+
+The `SameSite` cookie attribute provides additional CSRF protection:
+
+```python
+auth_config = AuthXConfig(
+    JWT_COOKIE_SAMESITE="lax",  # or "strict" or "none"
+)
+```
+
+<CodeGroup>
+
+```python Strict
+# Most restrictive - cookies only sent for same-site requests
+JWT_COOKIE_SAMESITE="strict"
+
+# Use when:
+# - Your frontend and API are on the same domain
+# - You don't need cross-site navigation with cookies
+```
+
+```python Lax (recommended)
+# Balanced - cookies sent for top-level navigation
+JWT_COOKIE_SAMESITE="lax"
+
+# Use when:
+# - You want CSRF protection
+# - You need cookies for links from external sites
+# - Most common setting for authentication cookies
+```
+
+```python None
+# Permissive - cookies sent for all requests (requires Secure flag)
+JWT_COOKIE_SAMESITE="none"
+JWT_COOKIE_SECURE=True  # Required when SameSite=None
+
+# Use when:
+# - Your frontend is on a different domain than your API
+# - You need cross-origin requests with cookies
+# - Must use HTTPS in production
+```
+
+</CodeGroup>
+
+## Complete example
+
+```python
+from fastapi import FastAPI, HTTPException, Request, Response
+from pydantic import BaseModel
+from authx import AuthX, AuthXConfig
+from authx.schema import TokenPayload
+
+app = FastAPI(title="CSRF Protection Example")
+
+# Configure with CSRF protection
+auth_config = AuthXConfig(
+    JWT_ALGORITHM="HS256",
+    JWT_SECRET_KEY="your-secret-key",
+    JWT_TOKEN_LOCATION=["cookies"],
+    # Cookie settings
+    JWT_COOKIE_SECURE=False,  # True in production
+    JWT_COOKIE_HTTP_ONLY=True,
+    JWT_COOKIE_SAMESITE="lax",
+    # CSRF settings
+    JWT_COOKIE_CSRF_PROTECT=True,
+    JWT_CSRF_IN_COOKIES=True,
+    JWT_CSRF_METHODS=["POST", "PUT", "PATCH", "DELETE"],
+    JWT_ACCESS_CSRF_HEADER_NAME="X-CSRF-TOKEN",
+)
+
+auth = AuthX(config=auth_config)
+auth.handle_errors(app)
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+USERS = {
+    "user1": {"password": "password1", "email": "user1@example.com"},
+}
+
+@app.post("/login")
+def login(data: LoginRequest, response: Response):
+    """Login - sets both JWT and CSRF cookies."""
+    if data.username in USERS and USERS[data.username]["password"] == data.password:
+        access_token = auth.create_access_token(uid=data.username)
+        # Sets both jwt cookie and csrf cookie
+        auth.set_access_cookies(access_token, response)
+        return {"message": "Login successful"}
+    
+    raise HTTPException(status_code=401, detail="Invalid credentials")
+
+@app.get("/protected")
+async def get_data(payload: TokenPayload = auth.ACCESS_REQUIRED):
+    """GET - no CSRF validation needed."""
+    return {"message": "Data retrieved", "user": payload.sub}
+
+@app.post("/posts")
+async def create_post(payload: TokenPayload = auth.ACCESS_REQUIRED):
+    """POST - CSRF token required and automatically validated."""
+    return {"message": "Post created", "user": payload.sub}
+
+@app.delete("/posts/{post_id}")
+async def delete_post(post_id: int, payload: TokenPayload = auth.ACCESS_REQUIRED):
+    """DELETE - CSRF token required."""
+    return {"message": f"Post {post_id} deleted"}
+
+@app.post("/logout")
+def logout(response: Response):
+    """Logout - clears both JWT and CSRF cookies."""
+    auth.unset_cookies(response)
+    return {"message": "Logged out"}
+```
+
+## Testing CSRF protection
+
+```python
+import pytest
+from fastapi.testclient import TestClient
+
+def test_csrf_protection():
+    client = TestClient(app)
+    
+    # Login
+    response = client.post(
+        "/login",
+        json={"username": "user1", "password": "password1"}
+    )
+    assert response.status_code == 200
+    
+    # GET works without CSRF token
+    response = client.get("/protected")
+    assert response.status_code == 200
+    
+    # POST without CSRF token should fail
+    response = client.post("/posts")
+    assert response.status_code == 401
+    
+    # POST with CSRF token should work
+    csrf_token = client.cookies.get("csrf_access_token")
+    response = client.post(
+        "/posts",
+        headers={"X-CSRF-TOKEN": csrf_token}
+    )
+    assert response.status_code == 200
+```
+
+## Best practices
+
+<Note>
+  **CSRF protection recommendations:**
+  
+  - Always enable CSRF protection when using cookies (`JWT_COOKIE_CSRF_PROTECT=True`)
+  - Use `SameSite="lax"` or `"strict"` for additional protection
+  - Only validate CSRF for state-changing operations (POST, PUT, DELETE)
+  - Include CSRF tokens in request headers, not query parameters
+  - Regenerate CSRF tokens when privileges change
+  - Use HTTPS in production with `JWT_COOKIE_SECURE=True`
+  - Don't disable CSRF protection in production
+  - Test your CSRF protection implementation
+</Note>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Cookie authentication" icon="cookie" href="/guides/cookie-authentication">
+    Complete guide to cookie-based authentication
+  </Card>
+  <Card title="Error handling" icon="triangle-exclamation" href="/guides/error-handling">
+    Handle CSRF and other authentication errors
+  </Card>
+  <Card title="Token revocation" icon="ban" href="/guides/token-revocation">
+    Implement logout with token blocklisting
+  </Card>
+  <Card title="Basic usage" icon="rocket" href="/guides/basic-usage">
+    Return to basic authentication concepts
+  </Card>
+</CardGroup>

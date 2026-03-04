@@ -1,0 +1,443 @@
+---
+title: Configuration
+description: Complete guide to configuring AuthX for your FastAPI application
+---
+
+AuthX is configured through the `AuthXConfig` class, which extends Pydantic's `BaseSettings`. This allows configuration through environment variables, `.env` files, or direct instantiation.
+
+## Basic configuration
+
+Create a configuration instance and pass it to AuthX:
+
+```python
+from authx import AuthX, AuthXConfig
+from datetime import timedelta
+
+config = AuthXConfig(
+    JWT_SECRET_KEY="your-secret-key-keep-it-secret",
+    JWT_ACCESS_TOKEN_EXPIRES=timedelta(minutes=15),
+    JWT_REFRESH_TOKEN_EXPIRES=timedelta(days=30)
+)
+
+auth = AuthX(config=config)
+```
+
+## Environment variables
+
+All configuration options can be set via environment variables:
+
+```bash
+# .env file
+JWT_SECRET_KEY=your-secret-key-keep-it-secret
+JWT_ACCESS_TOKEN_EXPIRES=900  # 15 minutes in seconds
+JWT_ALGORITHM=HS256
+JWT_TOKEN_LOCATION=["headers","cookies"]
+```
+
+```python
+from authx import AuthX, AuthXConfig
+
+# Automatically loads from environment
+config = AuthXConfig()
+auth = AuthX(config=config)
+```
+
+See `config.py:21` for the `AuthXConfig` class definition.
+
+## Token configuration
+
+### Expiration settings
+
+Control how long tokens remain valid:
+
+```python
+from datetime import timedelta
+
+config = AuthXConfig(
+    # Access token expires in 15 minutes
+    JWT_ACCESS_TOKEN_EXPIRES=timedelta(minutes=15),
+    
+    # Refresh token expires in 20 days
+    JWT_REFRESH_TOKEN_EXPIRES=timedelta(days=20)
+)
+```
+
+**Type**: `Optional[timedelta]`  
+**Default**: `timedelta(minutes=15)` for access, `timedelta(days=20)` for refresh  
+**Reference**: `config.py:35` and `config.py:48`
+
+<Note>
+Set to `None` for tokens that never expire. This is not recommended for production.
+</Note>
+
+### Algorithm and keys
+
+Configure the cryptographic algorithm and keys for token signing:
+
+```python
+config = AuthXConfig(
+    # Symmetric algorithms (HS256, HS384, HS512)
+    JWT_ALGORITHM="HS256",
+    JWT_SECRET_KEY="your-secret-key",
+    
+    # Asymmetric algorithms (RS256, ES256, etc.)
+    # JWT_ALGORITHM="RS256",
+    # JWT_PUBLIC_KEY="-----BEGIN PUBLIC KEY-----\n...",
+    # JWT_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n..."
+)
+```
+
+<Tabs>
+  <Tab title="JWT_ALGORITHM">
+    **Type**: `AlgorithmType`  
+    **Default**: `"HS256"`  
+    **Options**: `HS256`, `HS384`, `HS512`, `RS256`, `RS384`, `RS512`, `ES256`, `ES384`, `ES512`, `PS256`, `PS384`, `PS512`  
+    **Reference**: `config.py:36`
+  </Tab>
+  <Tab title="JWT_SECRET_KEY">
+    **Type**: `Optional[str]`  
+    **Default**: `None`  
+    **Required for**: Symmetric algorithms (HS256, HS384, HS512)  
+    **Reference**: `config.py:49`
+  </Tab>
+  <Tab title="JWT_PUBLIC_KEY">
+    **Type**: `Optional[str]`  
+    **Default**: `None`  
+    **Required for**: Asymmetric algorithms (RS*, ES*, PS*)  
+    **Reference**: `config.py:47`
+  </Tab>
+  <Tab title="JWT_PRIVATE_KEY">
+    **Type**: `Optional[str]`  
+    **Default**: `None`  
+    **Required for**: Asymmetric algorithms (RS*, ES*, PS*)  
+    **Reference**: `config.py:46`
+  </Tab>
+</Tabs>
+
+### JWT claims
+
+Configure standard JWT claims:
+
+```python
+config = AuthXConfig(
+    # Identity claim (subject)
+    JWT_IDENTITY_CLAIM="sub",
+    
+    # Issuer claim
+    JWT_ENCODE_ISSUER="https://api.example.com",
+    JWT_DECODE_ISSUER="https://api.example.com",
+    
+    # Audience claim
+    JWT_ENCODE_AUDIENCE="my-app",
+    JWT_DECODE_AUDIENCE="my-app",
+    
+    # Not-before claim
+    JWT_ENCODE_NBF=True,
+    
+    # Leeway for clock skew (seconds)
+    JWT_DECODE_LEEWAY=0
+)
+```
+
+**Available options**:
+
+- `JWT_IDENTITY_CLAIM` (str, default: `"sub"`): Claim for user identity - `config.py:45`
+- `JWT_ENCODE_ISSUER` (Optional[str], default: `None`): Issuer for encoding - `config.py:42`
+- `JWT_DECODE_ISSUER` (Optional[str], default: `None`): Expected issuer for decoding - `config.py:39`
+- `JWT_ENCODE_AUDIENCE` (Optional[StringOrSequence], default: `None`): Audience for encoding - `config.py:41`
+- `JWT_DECODE_AUDIENCE` (Optional[StringOrSequence], default: `None`): Expected audience for decoding - `config.py:38`
+- `JWT_ENCODE_NBF` (bool, default: `True`): Include not-before claim - `config.py:43`
+- `JWT_DECODE_LEEWAY` (Optional[int], default: `0`): Clock skew tolerance in seconds - `config.py:40`
+- `JWT_DECODE_ALGORITHMS` (Sequence[AlgorithmType], default: `["HS256"]`): Allowed algorithms for decoding - `config.py:37`
+
+### Error messages
+
+Customize error message format:
+
+```python
+config = AuthXConfig(
+    # Key for error messages in JSON responses
+    JWT_ERROR_MESSAGE_KEY="msg"  # or "error", "message", etc.
+)
+```
+
+**Type**: `str`  
+**Default**: `"msg"`  
+**Reference**: `config.py:44`
+
+## Token location configuration
+
+Configure where tokens are sent and received:
+
+```python
+config = AuthXConfig(
+    # Enable multiple locations
+    JWT_TOKEN_LOCATION=["headers", "cookies"]
+)
+```
+
+**Type**: `TokenLocations` (Sequence of "headers", "cookies", "json", "query")  
+**Default**: `["headers"]`  
+**Reference**: `config.py:50`
+
+### Header options
+
+Configure header-based authentication:
+
+```python
+config = AuthXConfig(
+    JWT_HEADER_NAME="Authorization",
+    JWT_HEADER_TYPE="Bearer"  # Set to empty string for no prefix
+)
+```
+
+- `JWT_HEADER_NAME` (str, default: `"Authorization"`): Header name - `config.py:52`
+- `JWT_HEADER_TYPE` (str, default: `"Bearer"`): Token prefix - `config.py:53`
+
+### Cookie options
+
+Configure cookie-based authentication:
+
+```python
+config = AuthXConfig(
+    # Access token cookie
+    JWT_ACCESS_COOKIE_NAME="access_token_cookie",
+    JWT_ACCESS_COOKIE_PATH="/",
+    
+    # Refresh token cookie
+    JWT_REFRESH_COOKIE_NAME="refresh_token_cookie",
+    JWT_REFRESH_COOKIE_PATH="/",
+    
+    # Security settings
+    JWT_COOKIE_SECURE=True,  # HTTPS only
+    JWT_COOKIE_HTTP_ONLY=True,  # Prevent JavaScript access
+    JWT_COOKIE_SAMESITE="lax",  # "lax", "strict", or "none"
+    JWT_COOKIE_DOMAIN=None,  # Cookie domain
+    JWT_COOKIE_MAX_AGE=None,  # Max age in seconds
+    JWT_SESSION_COOKIE=True  # Delete on browser close
+)
+```
+
+**Available options**:
+
+- `JWT_ACCESS_COOKIE_NAME` (str, default: `"access_token_cookie"`): Access token cookie name - `config.py:55`
+- `JWT_ACCESS_COOKIE_PATH` (str, default: `"/"`): Access token cookie path - `config.py:56`
+- `JWT_REFRESH_COOKIE_NAME` (str, default: `"refresh_token_cookie"`): Refresh token cookie name - `config.py:63`
+- `JWT_REFRESH_COOKIE_PATH` (str, default: `"/"`): Refresh token cookie path - `config.py:64`
+- `JWT_COOKIE_SECURE` (bool, default: `True`): Require HTTPS - `config.py:61`
+- `JWT_COOKIE_HTTP_ONLY` (bool, default: `True`): Prevent JavaScript access - `config.py:62`
+- `JWT_COOKIE_SAMESITE` (Optional[SameSitePolicy], default: `"lax"`): SameSite policy - `config.py:60`
+- `JWT_COOKIE_DOMAIN` (Optional[str], default: `None`): Cookie domain - `config.py:58`
+- `JWT_COOKIE_MAX_AGE` (Optional[int], default: `None`): Max age in seconds - `config.py:59`
+- `JWT_SESSION_COOKIE` (bool, default: `True`): Session cookie - `config.py:65`
+
+<Warning>
+Always set `JWT_COOKIE_SECURE=True` in production to ensure cookies are only sent over HTTPS.
+</Warning>
+
+### CSRF protection
+
+Configure CSRF protection for cookie-based authentication:
+
+```python
+config = AuthXConfig(
+    # Enable CSRF protection
+    JWT_COOKIE_CSRF_PROTECT=True,
+    
+    # CSRF token in cookies
+    JWT_CSRF_IN_COOKIES=True,
+    JWT_ACCESS_CSRF_COOKIE_NAME="csrf_access_token",
+    JWT_REFRESH_CSRF_COOKIE_NAME="csrf_refresh_token",
+    JWT_ACCESS_CSRF_COOKIE_PATH="/",
+    JWT_REFRESH_CSRF_COOKIE_PATH="/",
+    
+    # CSRF token in headers
+    JWT_ACCESS_CSRF_HEADER_NAME="X-CSRF-TOKEN",
+    JWT_REFRESH_CSRF_HEADER_NAME="X-CSRF-TOKEN",
+    
+    # CSRF token in form data
+    JWT_CSRF_CHECK_FORM=False,
+    JWT_ACCESS_CSRF_FIELD_NAME="csrf_token",
+    JWT_REFRESH_CSRF_FIELD_NAME="csrf_token",
+    
+    # HTTP methods requiring CSRF
+    JWT_CSRF_METHODS=["POST", "PUT", "PATCH", "DELETE"]
+)
+```
+
+**Available options**:
+
+- `JWT_COOKIE_CSRF_PROTECT` (bool, default: `True`): Enable CSRF protection - `config.py:57`
+- `JWT_CSRF_IN_COOKIES` (bool, default: `True`): Store CSRF token in cookies - `config.py:72`
+- `JWT_ACCESS_CSRF_COOKIE_NAME` (str, default: `"csrf_access_token"`): Access CSRF cookie name - `config.py:67`
+- `JWT_ACCESS_CSRF_COOKIE_PATH` (str, default: `"/"`): Access CSRF cookie path - `config.py:68`
+- `JWT_REFRESH_CSRF_COOKIE_NAME` (str, default: `"csrf_refresh_token"`): Refresh CSRF cookie name - `config.py:74`
+- `JWT_REFRESH_CSRF_COOKIE_PATH` (str, default: `"/"`): Refresh CSRF cookie path - `config.py:75`
+- `JWT_ACCESS_CSRF_HEADER_NAME` (str, default: `"X-CSRF-TOKEN"`): Access CSRF header name - `config.py:70`
+- `JWT_REFRESH_CSRF_HEADER_NAME` (str, default: `"X-CSRF-TOKEN"`): Refresh CSRF header name - `config.py:77`
+- `JWT_ACCESS_CSRF_FIELD_NAME` (str, default: `"csrf_token"`): Access CSRF form field - `config.py:69`
+- `JWT_REFRESH_CSRF_FIELD_NAME` (str, default: `"csrf_token"`): Refresh CSRF form field - `config.py:76`
+- `JWT_CSRF_CHECK_FORM` (bool, default: `False`): Check form data for CSRF - `config.py:71`
+- `JWT_CSRF_METHODS` (HTTPMethods, default: `["POST", "PUT", "PATCH", "DELETE"]`): Methods requiring CSRF - `config.py:73`
+
+### Query parameter options
+
+Configure query parameter authentication:
+
+```python
+config = AuthXConfig(
+    JWT_QUERY_STRING_NAME="token"
+)
+```
+
+**Type**: `str`  
+**Default**: `"token"`  
+**Reference**: `config.py:79`
+
+### JSON body options
+
+Configure JSON body authentication:
+
+```python
+config = AuthXConfig(
+    JWT_JSON_KEY="access_token",
+    JWT_REFRESH_JSON_KEY="refresh_token"
+)
+```
+
+- `JWT_JSON_KEY` (str, default: `"access_token"`): Access token key in JSON - `config.py:81`
+- `JWT_REFRESH_JSON_KEY` (str, default: `"refresh_token"`): Refresh token key in JSON - `config.py:82`
+
+## Implicit refresh configuration
+
+Configure automatic token refresh for cookie-based authentication:
+
+```python
+from datetime import timedelta
+
+config = AuthXConfig(
+    # Refresh when token has less than 10 minutes remaining
+    JWT_IMPLICIT_REFRESH_DELTATIME=timedelta(minutes=10),
+    
+    # Exclude specific routes from implicit refresh
+    JWT_IMPLICIT_REFRESH_ROUTE_EXCLUDE=["/metrics", "/health"],
+    
+    # Include only specific routes (empty = all routes)
+    JWT_IMPLICIT_REFRESH_ROUTE_INCLUDE=[],
+    
+    # Exclude specific HTTP methods
+    JWT_IMPLICIT_REFRESH_METHOD_EXCLUDE=["OPTIONS"],
+    
+    # Include only specific HTTP methods (empty = all methods)
+    JWT_IMPLICIT_REFRESH_METHOD_INCLUDE=[]
+)
+```
+
+**Available options**:
+
+- `JWT_IMPLICIT_REFRESH_DELTATIME` (timedelta, default: `timedelta(minutes=10)`): When to refresh - `config.py:89`
+- `JWT_IMPLICIT_REFRESH_ROUTE_EXCLUDE` (list[str], default: `[]`): Routes to exclude - `config.py:85`
+- `JWT_IMPLICIT_REFRESH_ROUTE_INCLUDE` (list[str], default: `[]`): Routes to include - `config.py:86`
+- `JWT_IMPLICIT_REFRESH_METHOD_EXCLUDE` (HTTPMethods, default: `[]`): Methods to exclude - `config.py:87`
+- `JWT_IMPLICIT_REFRESH_METHOD_INCLUDE` (HTTPMethods, default: `[]`): Methods to include - `config.py:88`
+
+<Info>
+Implicit refresh middleware automatically refreshes access tokens before they expire, creating a seamless user experience for cookie-based authentication.
+</Info>
+
+## Configuration helpers
+
+The `AuthXConfig` class provides helper methods and properties:
+
+### Check algorithm type
+
+```python
+config = AuthXConfig(JWT_ALGORITHM="HS256")
+
+if config.is_algo_symmetric:
+    print("Using symmetric algorithm")
+    print(f"Secret key: {config.private_key}")
+
+if config.is_algo_asymmetric:
+    print("Using asymmetric algorithm")
+    print(f"Public key: {config.public_key}")
+    print(f"Private key: {config.private_key}")
+```
+
+See `config.py:92` for `is_algo_symmetric` and `config.py:97` for `is_algo_asymmetric`.
+
+### Check token location
+
+```python
+config = AuthXConfig(JWT_TOKEN_LOCATION=["headers", "cookies"])
+
+if config.has_location("cookies"):
+    print("Cookie authentication enabled")
+    # Configure CORS for cookies
+```
+
+Refer to `config.py:118` for the `has_location()` method.
+
+### Get encryption keys
+
+```python
+config = AuthXConfig(
+    JWT_ALGORITHM="HS256",
+    JWT_SECRET_KEY="secret"
+)
+
+# Get the appropriate key based on algorithm
+encoding_key = config.private_key  # For creating tokens
+decoding_key = config.public_key   # For verifying tokens
+```
+
+See `config.py:123` for `private_key` and `config.py:128` for `public_key`.
+
+## Complete example
+
+Here's a complete configuration example for a production application:
+
+```python
+from authx import AuthX, AuthXConfig
+from datetime import timedelta
+
+config = AuthXConfig(
+    # Algorithm and keys
+    JWT_ALGORITHM="HS256",
+    JWT_SECRET_KEY="your-secret-key-change-in-production",
+    
+    # Token expiration
+    JWT_ACCESS_TOKEN_EXPIRES=timedelta(minutes=15),
+    JWT_REFRESH_TOKEN_EXPIRES=timedelta(days=30),
+    
+    # Token locations
+    JWT_TOKEN_LOCATION=["headers", "cookies"],
+    
+    # Header configuration
+    JWT_HEADER_NAME="Authorization",
+    JWT_HEADER_TYPE="Bearer",
+    
+    # Cookie configuration
+    JWT_COOKIE_SECURE=True,
+    JWT_COOKIE_HTTP_ONLY=True,
+    JWT_COOKIE_SAMESITE="lax",
+    JWT_COOKIE_CSRF_PROTECT=True,
+    JWT_SESSION_COOKIE=False,
+    
+    # CSRF protection
+    JWT_CSRF_METHODS=["POST", "PUT", "PATCH", "DELETE"],
+    JWT_ACCESS_CSRF_HEADER_NAME="X-CSRF-TOKEN",
+    
+    # JWT claims
+    JWT_ENCODE_ISSUER="https://api.example.com",
+    JWT_DECODE_ISSUER="https://api.example.com",
+    JWT_ENCODE_AUDIENCE="example-app",
+    JWT_DECODE_AUDIENCE="example-app",
+    
+    # Implicit refresh
+    JWT_IMPLICIT_REFRESH_DELTATIME=timedelta(minutes=10),
+    JWT_IMPLICIT_REFRESH_ROUTE_EXCLUDE=["/health", "/metrics"]
+)
+
+auth = AuthX(config=config)
+```

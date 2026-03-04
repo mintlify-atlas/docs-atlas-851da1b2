@@ -1,0 +1,448 @@
+---
+title: Fresh tokens
+description: Require recent authentication for sensitive operations with fresh tokens
+---
+
+Fresh tokens are access tokens that are marked as "fresh" when created immediately after user authentication. They're used to ensure that sensitive operations require recent password verification, adding an extra layer of security.
+
+## When to use fresh tokens
+
+Fresh tokens are ideal for protecting sensitive operations that require recent authentication:
+
+- Changing password or email
+- Updating payment methods
+- Deleting account
+- Accessing highly sensitive data
+- Administrative actions
+- Financial transactions
+
+<Info>
+  **Security benefit**: Even if an attacker obtains a valid access token, they cannot perform sensitive operations that require a fresh token without knowing the user's password.
+</Info>
+
+## How fresh tokens work
+
+<Steps>
+  <Step title="Initial login">
+    User authenticates with credentials and receives a **fresh** access token.
+  </Step>
+  
+  <Step title="Token refresh">
+    When the access token is refreshed, the new token is **not fresh** (it wasn't created with password verification).
+  </Step>
+  
+  <Step title="Fresh requirement">
+    Sensitive operations check if the token is fresh. If not, the user must re-authenticate.
+  </Step>
+  
+  <Step title="Re-authentication">
+    User provides credentials again to get a new fresh token for the sensitive operation.
+  </Step>
+</Steps>
+
+## Creating fresh tokens
+
+Mark tokens as fresh during initial login:
+
+```python
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+from authx import AuthX, AuthXConfig
+
+app = FastAPI()
+
+auth_config = AuthXConfig(
+    JWT_ALGORITHM="HS256",
+    JWT_SECRET_KEY="your-secret-key",
+    JWT_TOKEN_LOCATION=["headers"],
+)
+
+auth = AuthX(config=auth_config)
+auth.handle_errors(app)
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+@app.post("/login")
+def login(data: LoginRequest):
+    """Login endpoint that returns a fresh token."""
+    # Validate credentials
+    if data.username in USERS and USERS[data.username]["password"] == data.password:
+        # Create a fresh token by setting fresh=True
+        fresh_token = auth.create_access_token(
+            uid=data.username,
+            fresh=True  # Mark token as fresh
+        )
+        
+        return {
+            "access_token": fresh_token,
+            "token_type": "bearer"
+        }
+    
+    raise HTTPException(status_code=401, detail="Invalid credentials")
+```
+
+<Warning>
+  Only set `fresh=True` when the user has just provided their credentials. Never mark a refreshed token as fresh.
+</Warning>
+
+## Creating non-fresh tokens
+
+When refreshing tokens, create non-fresh access tokens:
+
+```python
+from fastapi import Request
+
+@app.post("/refresh")
+async def refresh_token(request: Request):
+    """Refresh endpoint that creates a non-fresh token."""
+    # Get the current token
+    token = await auth.get_access_token_from_request(request)
+    payload = auth.verify_token(token)
+    
+    # Create a new token that is NOT fresh
+    access_token = auth.create_access_token(
+        uid=payload.sub,
+        fresh=False  # Explicitly mark as non-fresh
+    )
+    
+    return {
+        "access_token": access_token,
+        "token_type": "bearer"
+    }
+```
+
+## Protecting routes with fresh tokens
+
+Require fresh tokens for sensitive operations:
+
+### Using the FRESH_REQUIRED dependency
+
+```python
+from authx.schema import TokenPayload
+
+@app.post("/account/change-password")
+async def change_password(
+    payload: TokenPayload = auth.FRESH_REQUIRED
+):
+    """Change password - requires fresh token."""
+    return {
+        "message": "Password changed successfully",
+        "username": payload.sub
+    }
+
+@app.delete("/account")
+async def delete_account(
+    payload: TokenPayload = auth.FRESH_REQUIRED
+):
+    """Delete account - requires fresh token."""
+    return {
+        "message": "Account deleted",
+        "username": payload.sub
+    }
+```
+
+### Using token_required with verify_fresh
+
+```python
+from fastapi import Depends
+
+@app.post("/payment/update")
+async def update_payment(
+    payload: TokenPayload = Depends(
+        auth.token_required(verify_fresh=True)
+    )
+):
+    """Update payment method - requires fresh token."""
+    return {
+        "message": "Payment method updated",
+        "user": payload.sub
+    }
+```
+
+### Manual fresh token verification
+
+```python
+from authx.exceptions import FreshTokenRequiredError
+
+@app.post("/sensitive-operation")
+async def sensitive_operation(request: Request):
+    """Manually verify token freshness."""
+    token = await auth.get_access_token_from_request(request)
+    payload = auth.verify_token(token)
+    
+    # Check if token is fresh
+    if not payload.fresh:
+        raise FreshTokenRequiredError("This operation requires a fresh token")
+    
+    return {"message": "Operation completed"}
+```
+
+## Mixed security levels
+
+Combine fresh and non-fresh token requirements:
+
+```python
+from authx.schema import TokenPayload
+
+@app.get("/account/profile")
+async def get_profile(payload: TokenPayload = auth.ACCESS_REQUIRED):
+    """View profile - any valid token works."""
+    return {
+        "username": payload.sub,
+        "email": USERS[payload.sub]["email"],
+        "is_fresh": payload.fresh
+    }
+
+@app.put("/account/profile")
+async def update_profile(payload: TokenPayload = auth.ACCESS_REQUIRED):
+    """Update basic profile info - any valid token works."""
+    return {"message": "Profile updated"}
+
+@app.post("/account/email")
+async def change_email(payload: TokenPayload = auth.FRESH_REQUIRED):
+    """Change email - requires fresh token."""
+    return {"message": "Email change initiated"}
+
+@app.post("/account/password")
+async def change_password(payload: TokenPayload = auth.FRESH_REQUIRED):
+    """Change password - requires fresh token."""
+    return {"message": "Password changed"}
+```
+
+## Re-authentication endpoint
+
+Provide an endpoint for users to obtain fresh tokens:
+
+```python
+@app.post("/auth/verify-password")
+def verify_password(data: LoginRequest, payload: TokenPayload = auth.ACCESS_REQUIRED):
+    """Verify password and return a fresh token.
+    
+    User must be already logged in (valid token) but needs a fresh token
+    for a sensitive operation.
+    """
+    # Verify the token belongs to the user trying to authenticate
+    if data.username != payload.sub:
+        raise HTTPException(status_code=403, detail="Token mismatch")
+    
+    # Verify the password
+    if data.username in USERS and USERS[data.username]["password"] == data.password:
+        # Issue a new fresh token
+        fresh_token = auth.create_access_token(
+            uid=data.username,
+            fresh=True
+        )
+        
+        return {
+            "access_token": fresh_token,
+            "token_type": "bearer",
+            "fresh": True
+        }
+    
+    raise HTTPException(status_code=401, detail="Invalid password")
+```
+
+## Complete example
+
+```python
+from fastapi import FastAPI, HTTPException, Request
+from pydantic import BaseModel
+from authx import AuthX, AuthXConfig
+from authx.schema import TokenPayload
+
+app = FastAPI(title="Fresh Tokens Example")
+
+auth_config = AuthXConfig(
+    JWT_ALGORITHM="HS256",
+    JWT_SECRET_KEY="your-secret-key",
+    JWT_TOKEN_LOCATION=["headers"],
+)
+
+auth = AuthX(config=auth_config)
+auth.handle_errors(app)
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+USERS = {
+    "user1": {"password": "password1", "email": "user1@example.com"},
+    "user2": {"password": "password2", "email": "user2@example.com"},
+}
+
+@app.post("/login")
+def login(data: LoginRequest):
+    """Login and receive a fresh token."""
+    if data.username in USERS and USERS[data.username]["password"] == data.password:
+        fresh_token = auth.create_access_token(uid=data.username, fresh=True)
+        return {"access_token": fresh_token, "token_type": "bearer"}
+    
+    raise HTTPException(status_code=401, detail="Invalid credentials")
+
+@app.post("/refresh")
+async def refresh_token(request: Request):
+    """Refresh endpoint that creates a non-fresh token."""
+    token = await auth.get_access_token_from_request(request)
+    payload = auth.verify_token(token)
+    
+    # Non-fresh token
+    access_token = auth.create_access_token(uid=payload.sub, fresh=False)
+    return {"access_token": access_token, "token_type": "bearer"}
+
+@app.get("/protected")
+async def protected_route(payload: TokenPayload = auth.ACCESS_REQUIRED):
+    """Regular protected route - any valid token works."""
+    return {
+        "message": "Access granted",
+        "username": payload.sub,
+        "email": USERS.get(payload.sub, {}).get("email"),
+        "fresh": payload.fresh,
+    }
+
+@app.post("/account/change-password")
+async def change_password(payload: TokenPayload = auth.FRESH_REQUIRED):
+    """Sensitive operation - requires fresh token."""
+    return {
+        "message": "Password changed successfully",
+        "username": payload.sub,
+    }
+
+@app.delete("/account")
+async def delete_account(payload: TokenPayload = auth.FRESH_REQUIRED):
+    """Sensitive operation - requires fresh token."""
+    return {
+        "message": "Account deletion initiated",
+        "username": payload.sub,
+    }
+
+@app.post("/auth/verify-password")
+def verify_password(data: LoginRequest, payload: TokenPayload = auth.ACCESS_REQUIRED):
+    """Get a fresh token by verifying password."""
+    if data.username != payload.sub:
+        raise HTTPException(status_code=403, detail="Token mismatch")
+    
+    if data.username in USERS and USERS[data.username]["password"] == data.password:
+        fresh_token = auth.create_access_token(uid=data.username, fresh=True)
+        return {"access_token": fresh_token, "token_type": "bearer", "fresh": True}
+    
+    raise HTTPException(status_code=401, detail="Invalid password")
+```
+
+## Client-side flow
+
+<Steps>
+  <Step title="Perform normal operation">
+    ```python
+    # Regular API call with any valid token
+    response = httpx.get(
+        "http://localhost:8000/protected",
+        headers={"Authorization": f"Bearer {access_token}"}
+    )
+    # Success
+    ```
+  </Step>
+
+  <Step title="Attempt sensitive operation">
+    ```python
+    # Try to change password
+    response = httpx.post(
+        "http://localhost:8000/account/change-password",
+        headers={"Authorization": f"Bearer {access_token}"}
+    )
+    # Fails with 401 if token is not fresh
+    ```
+  </Step>
+
+  <Step title="Re-authenticate for fresh token">
+    ```python
+    # Verify password to get fresh token
+    response = httpx.post(
+        "http://localhost:8000/auth/verify-password",
+        headers={"Authorization": f"Bearer {access_token}"},
+        json={"username": "user1", "password": "password1"}
+    )
+    
+    fresh_token = response.json()["access_token"]
+    ```
+  </Step>
+
+  <Step title="Retry with fresh token">
+    ```python
+    # Now the operation succeeds
+    response = httpx.post(
+        "http://localhost:8000/account/change-password",
+        headers={"Authorization": f"Bearer {fresh_token}"}
+    )
+    # Success
+    ```
+  </Step>
+</Steps>
+
+## Error handling
+
+Handle fresh token requirements in your client:
+
+```python
+import httpx
+
+def make_request(url: str, token: str, is_sensitive: bool = False):
+    response = httpx.post(
+        url,
+        headers={"Authorization": f"Bearer {token}"}
+    )
+    
+    if response.status_code == 401 and is_sensitive:
+        error = response.json()
+        if error.get("error_type") == "FreshTokenRequiredError":
+            # Prompt user to re-enter password
+            password = get_password_from_user()
+            
+            # Get fresh token
+            fresh_response = httpx.post(
+                "http://localhost:8000/auth/verify-password",
+                headers={"Authorization": f"Bearer {token}"},
+                json={"username": current_user, "password": password}
+            )
+            
+            fresh_token = fresh_response.json()["access_token"]
+            
+            # Retry with fresh token
+            return httpx.post(
+                url,
+                headers={"Authorization": f"Bearer {fresh_token}"}
+            )
+    
+    return response
+```
+
+## Best practices
+
+<Note>
+  **Recommendations for fresh tokens:**
+  
+  - Only mark tokens as fresh immediately after password verification
+  - Never mark refreshed tokens as fresh
+  - Use fresh tokens for password changes, email changes, and account deletion
+  - Provide a re-authentication endpoint to obtain fresh tokens
+  - Consider time limits - even fresh tokens shouldn't be valid indefinitely
+  - Clearly communicate to users when re-authentication is required
+</Note>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Token revocation" icon="ban" href="/guides/token-revocation">
+    Implement logout and token blacklisting
+  </Card>
+  <Card title="Scopes and permissions" icon="shield-check" href="/guides/scopes-and-permissions">
+    Combine fresh tokens with scope-based permissions
+  </Card>
+  <Card title="Error handling" icon="triangle-exclamation" href="/guides/error-handling">
+    Handle fresh token errors gracefully
+  </Card>
+  <Card title="Custom callbacks" icon="code" href="/guides/custom-callbacks">
+    Implement custom authentication logic
+  </Card>
+</CardGroup>

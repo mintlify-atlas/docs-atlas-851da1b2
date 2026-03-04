@@ -1,0 +1,296 @@
+---
+title: Token locations
+description: Learn how to send and receive JWT tokens in different parts of HTTP requests
+---
+
+AuthX supports multiple locations for sending and receiving JWT tokens. You can configure which locations are enabled using the `JWT_TOKEN_LOCATION` configuration option.
+
+## Available locations
+
+AuthX supports four token locations:
+
+- **headers**: Authorization header (most common)
+- **cookies**: HTTP cookies (best for web applications)
+- **json**: Request body (for API-first applications)
+- **query**: URL query parameters (use with caution)
+
+```python
+from authx import AuthX, AuthXConfig
+from datetime import timedelta
+
+config = AuthXConfig(
+    JWT_SECRET_KEY="your-secret-key",
+    # Enable multiple locations
+    JWT_TOKEN_LOCATION=["headers", "cookies"]
+)
+
+auth = AuthX(config=config)
+```
+
+See `config.py:50` for the `JWT_TOKEN_LOCATION` configuration.
+
+## Headers
+
+The most common method for API authentication. Tokens are sent in the `Authorization` header:
+
+```python
+config = AuthXConfig(
+    JWT_TOKEN_LOCATION=["headers"],
+    JWT_HEADER_NAME="Authorization",  # Header name
+    JWT_HEADER_TYPE="Bearer"  # Prefix for the token
+)
+```
+
+### Client usage
+
+```http
+GET /api/protected HTTP/1.1
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+```
+
+```python
+import httpx
+
+response = httpx.get(
+    "http://localhost:8000/protected",
+    headers={"Authorization": f"Bearer {access_token}"}
+)
+```
+
+<Info>
+Header-based authentication is stateless and works well with mobile apps, SPAs, and third-party API consumers.
+</Info>
+
+Refer to `core.py:14` for the `_get_token_from_headers()` implementation.
+
+## Cookies
+
+Best for traditional web applications with server-side rendering. Provides automatic CSRF protection:
+
+```python
+config = AuthXConfig(
+    JWT_TOKEN_LOCATION=["cookies"],
+    # Access token cookie settings
+    JWT_ACCESS_COOKIE_NAME="access_token_cookie",
+    JWT_ACCESS_COOKIE_PATH="/",
+    # Refresh token cookie settings
+    JWT_REFRESH_COOKIE_NAME="refresh_token_cookie",
+    JWT_REFRESH_COOKIE_PATH="/",
+    # Security settings
+    JWT_COOKIE_SECURE=True,  # HTTPS only
+    JWT_COOKIE_HTTP_ONLY=True,  # Prevent JavaScript access
+    JWT_COOKIE_SAMESITE="lax",  # CSRF protection
+    JWT_COOKIE_CSRF_PROTECT=True,  # Enable CSRF protection
+    JWT_SESSION_COOKIE=True  # Delete on browser close
+)
+```
+
+### Setting cookies
+
+Use the helper methods to set cookies in responses:
+
+```python
+from fastapi import Response
+
+@app.post("/login")
+async def login(response: Response):
+    access_token = auth.create_access_token(uid="user123")
+    refresh_token = auth.create_refresh_token(uid="user123")
+    
+    # Set both tokens as cookies
+    auth.set_access_cookies(access_token, response)
+    auth.set_refresh_cookies(refresh_token, response)
+    
+    return {"message": "Login successful"}
+```
+
+See `main.py:469` for `set_access_cookies()` and `main.py:484` for `set_refresh_cookies()`.
+
+### Unsetting cookies
+
+Remove cookies during logout:
+
+```python
+@app.post("/logout")
+async def logout(response: Response):
+    auth.unset_cookies(response)
+    return {"message": "Logged out"}
+```
+
+Refer to `main.py:521` for the `unset_cookies()` method.
+
+### CSRF protection
+
+When using cookies, AuthX automatically protects against CSRF attacks:
+
+```python
+config = AuthXConfig(
+    JWT_COOKIE_CSRF_PROTECT=True,
+    # CSRF token headers
+    JWT_ACCESS_CSRF_HEADER_NAME="X-CSRF-TOKEN",
+    JWT_REFRESH_CSRF_HEADER_NAME="X-CSRF-TOKEN",
+    # CSRF cookie names
+    JWT_ACCESS_CSRF_COOKIE_NAME="csrf_access_token",
+    JWT_REFRESH_CSRF_COOKIE_NAME="csrf_refresh_token",
+    # CSRF token field names (for form data)
+    JWT_ACCESS_CSRF_FIELD_NAME="csrf_token",
+    JWT_REFRESH_CSRF_FIELD_NAME="csrf_token",
+    # Enable CSRF in cookies
+    JWT_CSRF_IN_COOKIES=True,
+    # Check form data for CSRF token
+    JWT_CSRF_CHECK_FORM=False,
+    # HTTP methods that require CSRF
+    JWT_CSRF_METHODS=["POST", "PUT", "PATCH", "DELETE"]
+)
+```
+
+<Warning>
+CSRF protection is enabled by default when using cookies. Clients must include the CSRF token from the `csrf_access_token` cookie in the `X-CSRF-TOKEN` header for state-changing requests.
+</Warning>
+
+### Client usage with CSRF
+
+```javascript
+// JavaScript example
+const csrfToken = document.cookie
+  .split('; ')
+  .find(row => row.startsWith('csrf_access_token='))
+  .split('=')[1];
+
+fetch('/api/protected', {
+  method: 'POST',
+  credentials: 'include',
+  headers: {
+    'X-CSRF-TOKEN': csrfToken
+  }
+});
+```
+
+See `core.py:36` for the `_get_token_from_cookies()` implementation.
+
+## JSON body
+
+Tokens can be sent in the request body as JSON. Useful for APIs that prefer this approach:
+
+```python
+config = AuthXConfig(
+    JWT_TOKEN_LOCATION=["json"],
+    JWT_JSON_KEY="access_token",  # Key for access token
+    JWT_REFRESH_JSON_KEY="refresh_token"  # Key for refresh token
+)
+```
+
+### Client usage
+
+```http
+POST /api/protected HTTP/1.1
+Content-Type: application/json
+
+{
+  "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+  "data": "some data"
+}
+```
+
+```python
+import httpx
+
+response = httpx.post(
+    "http://localhost:8000/protected",
+    json={
+        "access_token": access_token,
+        "data": "some data"
+    }
+)
+```
+
+<Note>
+JSON-based token transmission requires the `Content-Type` header to be `application/json`.
+</Note>
+
+Refer to `core.py:105` for the `_get_token_from_json()` implementation.
+
+## Query parameters
+
+Tokens can be passed as URL query parameters. Use this sparingly as it's less secure:
+
+```python
+config = AuthXConfig(
+    JWT_TOKEN_LOCATION=["query"],
+    JWT_QUERY_STRING_NAME="token"  # Query parameter name
+)
+```
+
+### Client usage
+
+```http
+GET /api/protected?token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9... HTTP/1.1
+```
+
+```python
+import httpx
+
+response = httpx.get(
+    "http://localhost:8000/protected",
+    params={"token": access_token}
+)
+```
+
+<Warning>
+Query parameter authentication is less secure because:
+- URLs are logged by servers and proxies
+- URLs appear in browser history
+- URLs can be shared accidentally
+
+Use this method only when necessary, such as for file downloads or WebSocket connections.
+</Warning>
+
+See `core.py:95` for the `_get_token_from_query()` implementation.
+
+## Multiple locations
+
+You can enable multiple token locations for flexibility:
+
+```python
+config = AuthXConfig(
+    JWT_TOKEN_LOCATION=["headers", "cookies"],
+    # Configure settings for each location
+    JWT_HEADER_NAME="Authorization",
+    JWT_COOKIE_SECURE=True
+)
+```
+
+AuthX checks locations in the order specified. The first location with a valid token is used.
+
+### Overriding locations per endpoint
+
+You can specify different locations for specific endpoints:
+
+```python
+@app.get("/protected")
+async def protected_route(
+    payload = Depends(
+        auth.token_required(locations=["headers"])
+    )
+):
+    return {"user": payload.sub}
+```
+
+<Info>
+Specifying locations per endpoint is useful when you need different authentication methods for different parts of your API.
+</Info>
+
+Refer to `core.py:139` for the `_get_token_from_request()` implementation that handles multiple locations.
+
+## Location detection
+
+The `RequestToken` object includes information about where the token was found:
+
+```python
+from authx.schema import RequestToken
+
+token: RequestToken = await auth.get_access_token_from_request(request)
+print(token.location)  # "headers", "cookies", "json", or "query"
+```
+
+This is useful for analytics, security auditing, or applying different validation rules based on the token source.

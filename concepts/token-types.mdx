@@ -1,0 +1,331 @@
+---
+title: Token types
+description: Understanding access tokens, refresh tokens, and token freshness in AuthX
+---
+
+AuthX supports two types of tokens with different purposes and lifetimes. Understanding when to use each type is crucial for building secure authentication systems.
+
+## Access tokens
+
+Access tokens are short-lived tokens used to access protected resources. They prove that the user is authenticated:
+
+```python
+from authx import AuthX, AuthXConfig
+from datetime import timedelta
+
+config = AuthXConfig(
+    JWT_ACCESS_TOKEN_EXPIRES=timedelta(minutes=15)
+)
+
+auth = AuthX(config=config)
+access_token = auth.create_access_token(uid="user123")
+```
+
+### Access token properties
+
+- **Short-lived**: Default expiration is 15 minutes
+- **Frequent use**: Sent with every API request
+- **Revocable**: Can be added to a blocklist
+- **Stateless**: Contains all necessary user information
+
+### Using access tokens
+
+Protect endpoints with the `ACCESS_REQUIRED` dependency:
+
+```python
+from fastapi import FastAPI, Depends
+from authx import AuthX
+
+app = FastAPI()
+auth = AuthX()
+
+@app.get("/api/profile")
+async def get_profile(payload = Depends(auth.ACCESS_REQUIRED)):
+    return {
+        "user_id": payload.sub,
+        "scopes": payload.scopes
+    }
+```
+
+See `main.py:389` for the `create_access_token()` implementation and `config.py:35` for the `JWT_ACCESS_TOKEN_EXPIRES` setting.
+
+### Custom expiration
+
+Override the default expiration for specific tokens:
+
+```python
+from datetime import timedelta
+
+# Token expires in 1 hour
+access_token = auth.create_access_token(
+    uid="user123",
+    expiry=timedelta(hours=1)
+)
+
+# Token expires at specific datetime
+from datetime import datetime, timezone
+
+access_token = auth.create_access_token(
+    uid="user123",
+    expiry=datetime(2026, 12, 31, 23, 59, 59, tzinfo=timezone.utc)
+)
+```
+
+<Info>
+Shorter-lived access tokens reduce the risk if a token is compromised, but require more frequent refresh operations.
+</Info>
+
+## Refresh tokens
+
+Refresh tokens are long-lived tokens used to obtain new access tokens without re-authentication:
+
+```python
+config = AuthXConfig(
+    JWT_REFRESH_TOKEN_EXPIRES=timedelta(days=20)
+)
+
+auth = AuthX(config=config)
+refresh_token = auth.create_refresh_token(uid="user123")
+```
+
+### Refresh token properties
+
+- **Long-lived**: Default expiration is 20 days
+- **Infrequent use**: Only used to refresh access tokens
+- **More sensitive**: Should be stored securely
+- **Single purpose**: Cannot access protected resources directly
+
+### Token refresh flow
+
+```python
+@app.post("/auth/login")
+async def login(username: str, password: str, response: Response):
+    # Verify credentials
+    user = await verify_credentials(username, password)
+    
+    # Create both tokens
+    access_token = auth.create_access_token(uid=user.id, fresh=True)
+    refresh_token = auth.create_refresh_token(uid=user.id)
+    
+    # Return or set as cookies
+    return {
+        "access_token": access_token,
+        "refresh_token": refresh_token
+    }
+
+@app.post("/auth/refresh")
+async def refresh(payload = Depends(auth.REFRESH_REQUIRED)):
+    # Create new access token (not fresh)
+    new_access_token = auth.create_access_token(
+        uid=payload.sub,
+        fresh=False
+    )
+    
+    return {"access_token": new_access_token}
+```
+
+Refer to `main.py:435` for the `create_refresh_token()` implementation and `config.py:48` for the `JWT_REFRESH_TOKEN_EXPIRES` setting.
+
+<Warning>
+Never use refresh tokens to access protected resources. They should only be used to obtain new access tokens.
+</Warning>
+
+## Token freshness
+
+Fresh tokens indicate that the user recently provided credentials. Use fresh tokens to protect sensitive operations:
+
+```python
+# Create a fresh token during login
+access_token = auth.create_access_token(
+    uid="user123",
+    fresh=True  # User just logged in
+)
+
+# Refreshed tokens are not fresh
+refreshed_token = auth.create_access_token(
+    uid="user123",
+    fresh=False  # Token from refresh endpoint
+)
+```
+
+### Requiring fresh tokens
+
+Protect sensitive endpoints with the `FRESH_REQUIRED` dependency:
+
+```python
+@app.post("/api/change-password")
+async def change_password(
+    new_password: str,
+    payload = Depends(auth.FRESH_REQUIRED)
+):
+    # This endpoint requires a fresh token
+    # User must have recently logged in
+    await update_password(payload.sub, new_password)
+    return {"message": "Password updated"}
+
+@app.post("/api/delete-account")
+async def delete_account(payload = Depends(auth.FRESH_REQUIRED)):
+    # Critical operation requires fresh authentication
+    await delete_user_account(payload.sub)
+    return {"message": "Account deleted"}
+```
+
+### Custom freshness verification
+
+You can also verify freshness manually:
+
+```python
+@app.post("/api/sensitive-operation")
+async def sensitive_operation(
+    payload = Depends(
+        auth.token_required(verify_fresh=True)
+    )
+):
+    # Only fresh tokens allowed
+    return {"message": "Operation completed"}
+```
+
+See `main.py:643` for the `fresh_token_required` property.
+
+<Note>
+Fresh tokens add an extra layer of security for sensitive operations without requiring full re-authentication.
+</Note>
+
+## Token payload structure
+
+Both token types contain standard JWT claims plus AuthX-specific fields:
+
+```python
+from authx.schema import TokenPayload
+
+# Decode a token
+token_payload = auth._decode_token(access_token)
+
+# Standard JWT claims
+token_payload.sub  # Subject (user ID)
+token_payload.jti  # JWT ID (unique identifier)
+token_payload.iat  # Issued at timestamp
+token_payload.exp  # Expiration timestamp
+token_payload.nbf  # Not before timestamp
+token_payload.iss  # Issuer
+token_payload.aud  # Audience
+
+# AuthX-specific claims
+token_payload.type  # "access" or "refresh"
+token_payload.fresh  # True if token is fresh
+token_payload.csrf  # CSRF token (for cookies)
+token_payload.scopes  # List of scopes
+```
+
+Refer to `schema.py:35` for the `TokenPayload` class definition.
+
+### Adding custom data
+
+Include custom data in tokens:
+
+```python
+access_token = auth.create_access_token(
+    uid="user123",
+    data={
+        "email": "user@example.com",
+        "role": "admin",
+        "department": "engineering"
+    }
+)
+
+# Access custom data
+payload = auth._decode_token(access_token)
+custom_data = payload.extra_dict
+print(custom_data["email"])  # "user@example.com"
+```
+
+<Info>
+Custom data is stored in the token payload and can be accessed without database queries. Keep tokens small by only including essential data.
+</Info>
+
+## Token expiration handling
+
+Check token expiration programmatically:
+
+```python
+from authx.schema import TokenPayload
+
+payload: TokenPayload = auth._decode_token(access_token)
+
+# Check time until expiration
+time_left = payload.time_until_expiry
+print(f"Token expires in {time_left.total_seconds()} seconds")
+
+# Check time since issued
+token_age = payload.time_since_issued
+print(f"Token was issued {token_age.total_seconds()} seconds ago")
+
+# Get expiration as datetime
+expiry = payload.expiry_datetime
+print(f"Token expires at {expiry}")
+```
+
+See `schema.py:112` for expiration-related properties.
+
+## Token scopes
+
+Both access and refresh tokens can include scopes for granular permissions:
+
+```python
+# Create token with scopes
+access_token = auth.create_access_token(
+    uid="user123",
+    scopes=["users:read", "posts:write", "admin:*"]
+)
+
+# Check scopes in payload
+payload = auth._decode_token(access_token)
+
+# Check if token has specific scopes
+if payload.has_scopes("users:read"):
+    print("Can read users")
+
+if payload.has_scopes("users:read", "users:write"):
+    print("Can read and write users")
+
+if payload.has_scopes("admin:users", "admin:settings", all_required=False):
+    print("Has at least one admin scope")
+```
+
+Refer to `schema.py:164` for the `has_scopes()` method.
+
+<Accordion title="Why use both access and refresh tokens?">
+Using separate token types provides better security:
+
+1. **Minimize exposure**: Access tokens are sent frequently but expire quickly
+2. **Reduce attack window**: Compromised access tokens are only valid briefly
+3. **Enable revocation**: Refresh tokens can be revoked without affecting active sessions
+4. **Support multiple devices**: Each device can have its own refresh token
+5. **Audit trail**: Track refresh token usage for security monitoring
+</Accordion>
+
+## Best practices
+
+<Tabs>
+  <Tab title="Access tokens">
+    - Keep expiration short (15-30 minutes)
+    - Include only essential data to minimize size
+    - Use scopes for fine-grained permissions
+    - Mark as fresh only during initial authentication
+    - Consider token rotation for high-security applications
+  </Tab>
+  <Tab title="Refresh tokens">
+    - Use longer expiration (days or weeks)
+    - Store securely (httpOnly cookies recommended)
+    - Implement rotation on each use
+    - Track usage for anomaly detection
+    - Revoke on logout or suspicious activity
+  </Tab>
+  <Tab title="Token freshness">
+    - Require fresh tokens for password changes
+    - Require fresh tokens for payment operations
+    - Require fresh tokens for account deletion
+    - Set fresh=False for refreshed tokens
+    - Consider re-authentication timeouts
+  </Tab>
+</Tabs>

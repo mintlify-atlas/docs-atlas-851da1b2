@@ -1,0 +1,208 @@
+---
+title: Redis cache
+description: HTTP caching with Redis for faster response times
+---
+
+HTTP caching allows you to store local copies of web resources for faster retrieval. The `authx-extra` package provides a Redis-based caching system designed to work seamlessly with FastAPI applications.
+
+<Warning>
+You need to install `authx-extra` to use HTTP caching features.
+
+```bash
+pip install authx-extra
+```
+</Warning>
+
+## How HTTP caching works
+
+HTTP caching occurs when the browser stores local copies of web resources for faster retrieval the next time the resource is required. As your application serves resources, it can attach cache headers to the response specifying the desired cache behavior.
+
+When an item is fully cached, the browser may choose to not contact the server at all and simply use its own cached copy.
+
+## HTTP cache headers
+
+There are two primary cache headers that control caching behavior:
+
+### Cache-Control
+
+The `Cache-Control` header is the most important header to set as it effectively "switches on" caching in the browser. With this header in place and set with a value that enables caching, the browser will cache the file for as long as specified. Without this header, the browser will re-request the file on each subsequent request.
+
+### Expires
+
+When accompanying the `Cache-Control` header, `Expires` simply sets a date from which the cached resource should no longer be considered valid. From this date forward, the browser will request a fresh copy of the resource.
+
+<Info>
+For more details about HTTP caching, see the [MDN HTTP Caching Guide](https://developer.mozilla.org/en-US/docs/Web/HTTP/Caching).
+</Info>
+
+## Initialize the cache
+
+First, set up the Redis connection and initialize the HTTP cache:
+
+```python
+import os
+import redis
+from authx_extra.cache import HTTPCache
+from pytz import timezone
+
+REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/3")
+redis_client = redis.Redis.from_url(REDIS_URL)
+
+africa_Casablanca = timezone('Africa/Casablanca')
+
+HTTPCache.init(
+    redis_url=REDIS_URL,
+    namespace='test_namespace',
+    tz=africa_Casablanca
+)
+```
+
+<Note>
+The `tz` attribute is important when the `cache` decorator relies on the `expire_end_of_day` and `expire_end_of_week` attributes to expire cache keys based on timezone-aware dates.
+</Note>
+
+## Cache your endpoints
+
+Use the `@cache` decorator to cache endpoint responses. The `ttl_in_seconds` parameter sets the cache expiration time:
+
+```python
+from datetime import datetime
+from fastapi import FastAPI, Request, Response
+from fastapi.responses import JSONResponse
+from authx_extra.cache import HTTPCache, cache
+
+app = FastAPI()
+
+@app.get("/b/home")
+@cache(key="b.home", ttl_in_seconds=180)
+async def home(request: Request, response: Response):
+    return JSONResponse({"page": "home", "datetime": str(datetime.utcnow())})
+
+@app.get("/b/welcome")
+@cache(key="b.home", end_of_week=True)
+async def welcome(request: Request, response: Response):
+    return JSONResponse({"page": "welcome", "datetime": str(datetime.utcnow())})
+```
+
+## Build dynamic cache keys
+
+While you can explicitly pass keys to the `key` attribute, you can also build keys dynamically based on parameters received by the controller method:
+
+```python
+class User:
+    id: str = "112358"
+
+user = User()
+
+@app.get("/b/logged-in")
+@cache(key="b.logged_in.{}", obj="user", obj_attr="id")
+async def logged_in(request: Request, response: Response, user=user):
+    return JSONResponse({
+        "page": "home",
+        "user": user.id,
+        "datetime": str(datetime.utcnow())
+    })
+```
+
+In this example, the key allows room for a dynamic attribute fetched from the object `user`. The key becomes `b.logged_in.112358` if `user.id` returns `112358`.
+
+## Invalidate cached data
+
+Use the `@invalidate_cache` decorator to clear cached data when it becomes stale:
+
+```python
+from authx_extra.cache import invalidate_cache
+
+class User:
+    id: str = "112358"
+
+user = User()
+
+@app.post("/b/logged-in")
+@invalidate_cache(
+    key="b.logged_in.{}",
+    obj="user",
+    obj_attr="id",
+    namespace="test_namespace"
+)
+async def post_logged_in(request: Request, response: Response, user=user):
+    return JSONResponse({
+        "page": "home",
+        "user": user.id,
+        "datetime": str(datetime.utcnow())
+    })
+```
+
+### Invalidate multiple keys
+
+You can invalidate multiple cache keys in a single call:
+
+```python
+@app.post("/b/logged-in")
+@invalidate_cache(
+    keys=["b.logged_in.{}", "b.profile.{}"],
+    obj="user",
+    obj_attr="id",
+    namespace="test_namespace"
+)
+async def post_logged_in(request: Request, response: Response, user=user):
+    return JSONResponse({
+        "page": "home",
+        "user": user.id,
+        "datetime": str(datetime.utcnow())
+    })
+```
+
+## Dynamic TTL with callables
+
+You can compute the TTL dynamically using a callable function:
+
+```python
+async def my_ttl_callable() -> int:
+    return 3600
+
+@app.get('/b/ttl_callable')
+@cache(key='b.ttl_callable_expiry', ttl_func=my_ttl_callable)
+async def path_with_ttl_callable(request: Request, response: Response):
+    return JSONResponse({
+        "page": "path_with_ttl_callable",
+        "datetime": str(datetime.utcnow())
+    })
+```
+
+<Note>
+The `ttl_func` is always assumed to be an async method.
+</Note>
+
+## Cache non-controller methods
+
+HTTP cache works exactly the same way with regular methods outside of FastAPI controllers:
+
+```python
+import os
+import redis
+from authx_extra.cache import HTTPCache, cache, invalidate_cache
+
+REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/3")
+redis_client = redis.Redis.from_url(REDIS_URL)
+
+HTTPCache.init(redis_url=REDIS_URL, namespace='test_namespace')
+
+@cache(key='cache.me', ttl_in_seconds=360)
+async def cache_me(x: int, invoke_count: int):
+    invoke_count = invoke_count + 1
+    result = x * 2
+    return [result, invoke_count]
+```
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Prometheus metrics" icon="chart-line" href="/extra/prometheus-metrics">
+    Add monitoring to track cache performance
+  </Card>
+  
+  <Card title="Profiling" icon="gauge" href="/extra/profiling">
+    Profile your application to optimize cache usage
+  </Card>
+</CardGroup>

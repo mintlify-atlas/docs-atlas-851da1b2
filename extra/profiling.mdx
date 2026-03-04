@@ -1,0 +1,221 @@
+---
+title: Profiling
+description: Performance profiling with pyinstrument for FastAPI
+---
+
+The `authx-extra` package includes a profiling middleware powered by pyinstrument, a statistical Python profiler that helps you identify performance bottlenecks in your FastAPI application.
+
+<Warning>
+You need to install `authx-extra` to use the profiling middleware.
+
+```bash
+pip install authx-extra
+```
+</Warning>
+
+## Introduction to pyinstrument
+
+Pyinstrument is a statistical Python profiler which records the call stack every 1ms rather than recording the whole trace. This approach is designed to avoid profiling overhead which can increase significantly if some functions are called many times while not taking much time to complete.
+
+### Benefits of statistical profiling
+
+- **Low overhead**: Avoids profiling noise by removing profiling information of faster parts of code
+- **Accurate results**: Highlights code that is actually slow, not just frequently called
+- **Focused insights**: Shows the parts of your code that matter most for performance
+
+### Trade-offs
+
+Some function calls that run very quickly may not be recorded, but since they're already fast, this typically doesn't affect optimization efforts.
+
+<Info>
+Pyinstrument uses OS signals to ask the OS to send a signal and handle signals using a Python signal handler (`PyEval_SetProfile`) for recording every 1ms.
+</Info>
+
+## Add profiling to your application
+
+Integrating profiling into your FastAPI application is straightforward:
+
+```python
+import os
+import uvicorn
+
+from fastapi import FastAPI
+from fastapi.responses import JSONResponse
+
+from authx_extra.profiler import ProfilerMiddleware
+
+app = FastAPI()
+app.add_middleware(ProfilerMiddleware)
+
+@app.get("/test")
+async def normal_request():
+    return JSONResponse({"retMsg": "Hello World!"})
+
+if __name__ == '__main__':
+    app_name = os.path.basename(__file__).replace(".py", "")
+    uvicorn.run(app=f"{app_name}:app", host="0.0.0.0", port=8080, workers=1)
+```
+
+## Middleware configuration
+
+The `ProfilerMiddleware` accepts several configuration options:
+
+```python
+app.add_middleware(
+    ProfilerMiddleware,
+    profiler_output_type="html",
+    is_print_each_request=False,
+    html_file_name="profiling.html"
+)
+```
+
+### Parameters
+
+- **profiler_output_type**: Output format for profiling data (`"text"`, `"html"`, or `"json"`)
+- **is_print_each_request**: Whether to print profiling information for each request (default: `False`)
+- **html_file_name**: Name of the HTML file to save profiling results (default: `"profiling.html"`)
+
+## Output formats
+
+The profiler supports three output formats:
+
+### Text output
+
+Plain text format showing the call stack and timing information:
+
+```
+  _     ._   __/__   _ _  _  _ _/_   Recorded: 16:39:21  Samples:  2192
+ /_//_/// /_\ / //_// / //_'/ //     Duration: 2.199     CPU time: 2.197
+/   _/                      v3.2.0
+
+Program: profiling_examples/pyinstrument_ex1.py
+
+2.199 <module>  pyinstrument_ex1.py:1
+└─ 2.199 get_sum_of_list  pyinstrument_ex1.py:7
+   ├─ 1.714 randint  random.py:218
+   │     [6 frames hidden]  random
+   │        1.442 randrange  random.py:174
+   │        ├─ 0.734 [self]
+   │        └─ 0.708 _randbelow  random.py:224
+   │           ├─ 0.501 [self]
+   │           ├─ 0.153 Random.getrandbits  ../<built-in>:0
+   │           └─ 0.054 int.bit_length  ../<built-in>:0
+   ├─ 0.405 [self]
+   ├─ 0.050 add  pyinstrument_ex1.py:3
+   └─ 0.030 list.append  ../<built-in>:0
+```
+
+### HTML output
+
+An interactive HTML report with collapsible call stacks and visual timing information. Perfect for detailed analysis.
+
+```python
+app.add_middleware(
+    ProfilerMiddleware,
+    profiler_output_type="html",
+    html_file_name="profiling.html"
+)
+```
+
+### JSON output
+
+Machine-readable JSON format for programmatic analysis or integration with other tools:
+
+```python
+app.add_middleware(
+    ProfilerMiddleware,
+    profiler_output_type="json"
+)
+```
+
+## Example profiling scenario
+
+Consider this simple example:
+
+```python
+import random
+
+def add(a, b):
+    return a + b
+
+def get_sum_of_list():
+    final_list = []
+    for i in range(1000000):
+        rand1 = random.randint(1, 100)
+        rand2 = random.randint(1, 100)
+        out = add(rand1, rand2)
+        final_list.append(out)
+    return final_list
+
+if __name__ == "__main__":
+    l = get_sum_of_list()
+```
+
+When profiled with pyinstrument, this reveals that most time is spent in `random.randint()` rather than the `add()` function, even though `add()` is called just as frequently.
+
+## Per-request profiling
+
+Enable `is_print_each_request` to see profiling output for every request:
+
+```python
+app.add_middleware(
+    ProfilerMiddleware,
+    profiler_output_type="text",
+    is_print_each_request=True
+)
+```
+
+<Warning>
+Enabling per-request printing in production is not recommended as it can generate large amounts of log output.
+</Warning>
+
+## Best practices
+
+### Development environment
+
+Use profiling during development to:
+
+- Identify slow endpoints
+- Optimize database queries
+- Find inefficient algorithms
+- Validate performance improvements
+
+### Production environment
+
+<Note>
+For production, consider using profiling selectively:
+- Only enable profiling for specific endpoints
+- Use sampling to profile a percentage of requests
+- Save profiling data to files instead of printing to console
+- Combine with Prometheus metrics to identify endpoints worth profiling
+</Note>
+
+## Interpreting results
+
+When reading pyinstrument output:
+
+1. **Total time**: The overall time spent in the function and its children
+2. **[self]**: Time spent in the function itself, excluding child calls
+3. **Hidden frames**: Pyinstrument collapses internal library frames for clarity
+4. **Call hierarchy**: Indentation shows the call stack structure
+
+## Optimize based on profiling data
+
+Use profiling results to guide optimization:
+
+1. Focus on functions with high total time
+2. Look for unexpected bottlenecks
+3. Verify that optimizations reduce the measured time
+4. Profile before and after changes to measure improvement
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Prometheus metrics" icon="chart-line" href="/extra/prometheus-metrics">
+    Monitor metrics to identify endpoints to profile
+  </Card>
+  
+  <Card title="Redis cache" icon="database" href="/extra/redis-cache">
+    Add caching to improve performance
+  </Card>
+</CardGroup>

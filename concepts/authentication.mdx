@@ -1,0 +1,221 @@
+---
+title: Authentication
+description: Learn how AuthX handles JWT authentication in FastAPI applications
+---
+
+AuthX provides a comprehensive JWT authentication system for FastAPI applications. It manages the entire authentication lifecycle, from token creation to validation and revocation.
+
+## How authentication works
+
+AuthX uses JSON Web Tokens (JWTs) to authenticate users. The authentication flow involves:
+
+1. **Token creation**: Generate access and refresh tokens for authenticated users
+2. **Token transmission**: Send tokens to clients via headers, cookies, JSON body, or query parameters
+3. **Token validation**: Verify tokens on protected endpoints
+4. **Token refresh**: Issue new access tokens using refresh tokens
+
+## Creating tokens
+
+Use the `create_access_token()` and `create_refresh_token()` methods to generate tokens:
+
+```python
+from authx import AuthX
+
+auth = AuthX()
+
+# Create an access token
+access_token = auth.create_access_token(uid="user123")
+
+# Create a refresh token
+refresh_token = auth.create_refresh_token(uid="user123")
+
+# Create a fresh token for sensitive operations
+fresh_token = auth.create_access_token(
+    uid="user123",
+    fresh=True
+)
+```
+
+Refer to `main.py:389` for the `create_access_token()` implementation and `main.py:435` for `create_refresh_token()`.
+
+## Protecting endpoints
+
+AuthX provides several FastAPI dependencies to protect your endpoints:
+
+### Access token required
+
+Require a valid access token:
+
+```python
+from fastapi import FastAPI, Depends
+from authx import AuthX
+
+app = FastAPI()
+auth = AuthX()
+
+@app.get("/protected")
+async def protected_route(payload = Depends(auth.ACCESS_REQUIRED)):
+    return {"user": payload.sub}
+```
+
+### Refresh token required
+
+Require a valid refresh token:
+
+```python
+@app.post("/refresh")
+async def refresh_tokens(payload = Depends(auth.REFRESH_REQUIRED)):
+    new_token = auth.create_access_token(uid=payload.sub)
+    return {"access_token": new_token}
+```
+
+### Fresh token required
+
+Require a fresh token for sensitive operations like password changes:
+
+```python
+@app.post("/change-password")
+async def change_password(payload = Depends(auth.FRESH_REQUIRED)):
+    # Only fresh tokens can access this endpoint
+    return {"message": "Password changed"}
+```
+
+See `main.py:552` for `FRESH_REQUIRED`, `main.py:557` for `ACCESS_REQUIRED`, and `main.py:562` for `REFRESH_REQUIRED`.
+
+## Token verification
+
+AuthX automatically verifies tokens when using dependencies. The verification process includes:
+
+- **Signature validation**: Ensures the token was signed with your secret key
+- **Expiration check**: Verifies the token hasn't expired
+- **Type verification**: Confirms the token type matches what's expected
+- **CSRF protection**: Validates CSRF tokens for cookie-based authentication
+- **Freshness check**: Ensures the token is fresh when required
+
+```python
+from authx.schema import RequestToken
+
+# Manual token verification
+request_token = await auth.get_access_token_from_request(request)
+payload = auth.verify_token(
+    request_token,
+    verify_type=True,
+    verify_fresh=False,
+    verify_csrf=True
+)
+```
+
+Refer to `main.py:361` for the `verify_token()` method.
+
+## Scope-based authorization
+
+AuthX supports scope-based access control for fine-grained permissions:
+
+```python
+# Require specific scopes
+@app.get("/users")
+async def list_users(
+    payload = Depends(auth.scopes_required("users:read"))
+):
+    return {"users": []}
+
+# Require multiple scopes (AND logic)
+@app.delete("/users/{id}")
+async def delete_user(
+    id: int,
+    payload = Depends(auth.scopes_required("users:read", "users:delete"))
+):
+    return {"message": f"User {id} deleted"}
+
+# Require any of the scopes (OR logic)
+@app.get("/admin")
+async def admin_panel(
+    payload = Depends(auth.scopes_required("admin", "superuser", all_required=False))
+):
+    return {"admin": True}
+
+# Wildcard scopes
+@app.get("/admin/users")
+async def admin_users(
+    payload = Depends(auth.scopes_required("admin:*"))
+):
+    # Matches any scope under "admin:"
+    return {"users": []}
+```
+
+<Info>
+Scopes support hierarchical wildcards. A scope like `admin:*` matches any scope starting with `admin:`, such as `admin:users` or `admin:settings`.
+</Info>
+
+See `main.py:672` for the `scopes_required()` implementation.
+
+## Token revocation
+
+Implement token revocation using the blocklist callback:
+
+```python
+from authx import AuthX
+
+auth = AuthX()
+
+# Sync callback
+@auth.set_callback_token_blocklist
+def check_if_token_revoked(token: str) -> bool:
+    # Check your database or cache
+    return token in revoked_tokens_db
+
+# Async callback
+@auth.set_callback_token_blocklist
+async def check_if_token_revoked(token: str) -> bool:
+    # Check your async database
+    return await is_token_revoked(token)
+```
+
+<Warning>
+Revoked tokens are checked automatically when using AuthX dependencies. If a token is in the blocklist, a `RevokedTokenError` is raised.
+</Warning>
+
+## Implicit token refresh
+
+AuthX supports automatic token refresh for cookie-based authentication:
+
+```python
+from fastapi import FastAPI
+from authx import AuthX
+
+app = FastAPI()
+auth = AuthX()
+
+# Add middleware for implicit refresh
+app.middleware("http")(auth.implicit_refresh_middleware)
+```
+
+This middleware automatically refreshes access tokens when they're close to expiration, creating a seamless user experience.
+
+<Note>
+Implicit refresh only works with cookie-based token storage. Configure `JWT_IMPLICIT_REFRESH_DELTATIME` to control when tokens are refreshed (default: 10 minutes before expiration).
+</Note>
+
+See `main.py:842` for the `implicit_refresh_middleware()` implementation.
+
+## Getting the current user
+
+Retrieve the authenticated user's subject data:
+
+```python
+from authx import AuthX
+
+auth = AuthX()
+
+# Define callback to fetch user
+@auth.set_callback_get_model_instance
+async def get_user(uid: str):
+    return await database.get_user(uid)
+
+# Use in endpoints
+@app.get("/me")
+async def get_current_user(user = Depends(auth.CURRENT_SUBJECT)):
+    return user
+```
+
+The `CURRENT_SUBJECT` dependency validates the token and fetches the user model automatically.

@@ -1,0 +1,505 @@
+---
+title: Token revocation
+description: Implement logout and token blacklisting to revoke JWT tokens
+---
+
+JWT tokens are stateless by design, meaning they remain valid until they expire. Token revocation allows you to invalidate tokens before their expiration, which is essential for implementing logout functionality and handling compromised tokens.
+
+## Why revoke tokens
+
+Common scenarios requiring token revocation:
+
+- User logout
+- Password change (invalidate all existing sessions)
+- Account suspension or deletion
+- Security breach (compromised token)
+- User logs out from all devices
+- Permission changes (revoke and re-issue tokens)
+
+<Warning>
+  Without token revocation, a stolen or leaked token remains valid until it expires, even if the user has logged out.
+</Warning>
+
+## How token revocation works
+
+<Steps>
+  <Step title="Store revoked tokens">
+    Maintain a blocklist of revoked token identifiers (JTI - JWT ID).
+  </Step>
+  
+  <Step title="Register callback">
+    Configure AuthX to check the blocklist before accepting any token.
+  </Step>
+  
+  <Step title="Revoke on logout">
+    When a user logs out, add their token's JTI to the blocklist.
+  </Step>
+  
+  <Step title="Reject revoked tokens">
+    AuthX automatically rejects tokens found in the blocklist.
+  </Step>
+</Steps>
+
+## Setting up the blocklist
+
+Create a storage mechanism for revoked tokens:
+
+<CodeGroup>
+
+```python In-memory (development)
+# Simple set for development (lost on restart)
+TOKEN_BLOCKLIST: set[str] = set()
+
+def check_if_token_revoked(token: str) -> bool:
+    """Check if a token is in the blocklist.
+    
+    Args:
+        token: The raw JWT token string
+        
+    Returns:
+        True if the token is revoked, False otherwise
+    """
+    return token in TOKEN_BLOCKLIST
+```
+
+```python Redis (production)
+import redis
+
+# Redis client for production
+redis_client = redis.Redis(
+    host='localhost',
+    port=6379,
+    db=0,
+    decode_responses=True
+)
+
+def check_if_token_revoked(token: str) -> bool:
+    """Check if a token is in the Redis blocklist.
+    
+    Args:
+        token: The raw JWT token string
+        
+    Returns:
+        True if the token is revoked, False otherwise
+    """
+    return redis_client.exists(f"revoked_token:{token}") > 0
+
+def revoke_token(token: str, exp_timestamp: int):
+    """Add token to Redis with expiration matching token expiry.
+    
+    Args:
+        token: The raw JWT token string
+        exp_timestamp: Token expiration timestamp
+    """
+    # Calculate TTL
+    import time
+    ttl = max(0, exp_timestamp - int(time.time()))
+    
+    # Store with automatic expiration
+    redis_client.setex(
+        f"revoked_token:{token}",
+        ttl,
+        "revoked"
+    )
+```
+
+```python Database (production)
+from sqlalchemy import Column, String, DateTime
+from datetime import datetime
+
+class RevokedToken(Base):
+    __tablename__ = "revoked_tokens"
+    
+    jti = Column(String, primary_key=True)
+    revoked_at = Column(DateTime, default=datetime.utcnow)
+    expires_at = Column(DateTime, nullable=False)
+
+def check_if_token_revoked(token: str) -> bool:
+    """Check if a token JTI is in the database blocklist.
+    
+    Args:
+        token: The raw JWT token string
+        
+    Returns:
+        True if the token is revoked, False otherwise
+    """
+    # You need to decode the token to get the JTI
+    # This is a simplified example
+    from authx.token import decode_token
+    payload = decode_token(token, key="your-secret", verify=False)
+    jti = payload.get("jti")
+    
+    return db.query(RevokedToken).filter(
+        RevokedToken.jti == jti
+    ).first() is not None
+```
+
+</CodeGroup>
+
+<Info>
+  **Performance tip**: Use Redis or another fast key-value store for production. Database queries add latency to every authenticated request.
+</Info>
+
+## Registering the blocklist callback
+
+Configure AuthX to check the blocklist:
+
+```python
+from fastapi import FastAPI
+from authx import AuthX, AuthXConfig
+
+app = FastAPI()
+
+auth_config = AuthXConfig(
+    JWT_ALGORITHM="HS256",
+    JWT_SECRET_KEY="your-secret-key",
+    JWT_TOKEN_LOCATION=["headers"],
+)
+
+auth = AuthX(config=auth_config)
+auth.handle_errors(app)
+
+# Storage for revoked tokens
+TOKEN_BLOCKLIST: set[str] = set()
+
+# Define the callback function
+def check_if_token_revoked(token: str) -> bool:
+    """Check if a token is revoked.
+    
+    This function is called by AuthX for every protected request.
+    Return True if the token should be rejected.
+    """
+    return token in TOKEN_BLOCKLIST
+
+# Register the callback with AuthX
+auth.set_token_blocklist(check_if_token_revoked)
+```
+
+<Tip>
+  The callback receives the raw token string. You can decode it to access claims like JTI if needed, but storing the full token is simpler for blocklisting.
+</Tip>
+
+## Implementing logout
+
+Create a logout endpoint that revokes the current token:
+
+```python
+from fastapi import Request, HTTPException
+
+@app.post("/logout")
+async def logout(request: Request):
+    """Logout endpoint that revokes the current token."""
+    # Get the token from the request
+    token = await auth.get_access_token_from_request(request)
+    
+    # Verify it's valid before revoking
+    payload = auth.verify_token(token)
+    
+    # Add the token to the blocklist
+    TOKEN_BLOCKLIST.add(token.token)
+    
+    return {"message": "Successfully logged out"}
+```
+
+## Automatic rejection
+
+Once a token is in the blocklist, AuthX automatically rejects it:
+
+```python
+from authx.schema import TokenPayload
+
+@app.get("/protected")
+async def protected_route(payload: TokenPayload = auth.ACCESS_REQUIRED):
+    """Protected route that checks token revocation automatically."""
+    # If the token is in the blocklist, this code is never reached
+    # AuthX raises RevokedTokenError (401) before entering the route
+    
+    return {
+        "message": "Access granted",
+        "username": payload.sub
+    }
+```
+
+When a revoked token is used:
+
+```json
+{
+  "message": "Invalid token",
+  "error_type": "RevokedTokenError"
+}
+```
+
+## Revoking refresh tokens
+
+Revoke refresh tokens separately:
+
+```python
+@app.post("/logout")
+async def logout(request: Request):
+    """Logout and revoke both access and refresh tokens."""
+    # Revoke access token
+    access_token = await auth.get_access_token_from_request(request)
+    TOKEN_BLOCKLIST.add(access_token.token)
+    
+    # Also revoke refresh token if present
+    try:
+        refresh_token = await auth.get_refresh_token_from_request(request)
+        TOKEN_BLOCKLIST.add(refresh_token.token)
+    except:
+        pass  # No refresh token present
+    
+    return {"message": "Successfully logged out"}
+```
+
+## Revoking all user tokens
+
+Revoke all tokens for a specific user:
+
+```python
+# Store tokens by user
+USER_TOKENS: dict[str, set[str]] = {}
+
+@app.post("/login")
+def login(data: LoginRequest):
+    """Login and track tokens per user."""
+    access_token = auth.create_access_token(uid=data.username)
+    
+    # Track this token for the user
+    if data.username not in USER_TOKENS:
+        USER_TOKENS[data.username] = set()
+    USER_TOKENS[data.username].add(access_token)
+    
+    return {"access_token": access_token, "token_type": "bearer"}
+
+@app.post("/logout-all")
+async def logout_all_devices(payload: TokenPayload = auth.ACCESS_REQUIRED):
+    """Logout from all devices by revoking all user tokens."""
+    username = payload.sub
+    
+    # Revoke all tokens for this user
+    if username in USER_TOKENS:
+        for token in USER_TOKENS[username]:
+            TOKEN_BLOCKLIST.add(token)
+        USER_TOKENS[username].clear()
+    
+    return {"message": "Logged out from all devices"}
+```
+
+## Revoking tokens on password change
+
+Automatically revoke all tokens when password changes:
+
+```python
+@app.post("/account/change-password")
+async def change_password(
+    new_password: str,
+    payload: TokenPayload = auth.FRESH_REQUIRED
+):
+    """Change password and invalidate all existing tokens."""
+    username = payload.sub
+    
+    # Update password in database
+    USERS[username]["password"] = new_password
+    
+    # Revoke all existing tokens for this user
+    if username in USER_TOKENS:
+        for token in USER_TOKENS[username]:
+            TOKEN_BLOCKLIST.add(token)
+        USER_TOKENS[username].clear()
+    
+    # Create a new fresh token
+    new_token = auth.create_access_token(uid=username, fresh=True)
+    
+    return {
+        "message": "Password changed successfully",
+        "access_token": new_token,
+        "token_type": "bearer"
+    }
+```
+
+## Using JTI instead of full token
+
+Store only the JTI (JWT ID) for more efficient storage:
+
+```python
+# Store JTIs instead of full tokens
+REVOKED_JTIS: set[str] = set()
+
+def check_if_token_revoked(token: str) -> bool:
+    """Check if a token's JTI is revoked."""
+    # Decode token to get JTI (without verification for blocklist check)
+    from authx.token import decode_token
+    
+    try:
+        payload = decode_token(token, key=auth.config.public_key, verify=False)
+        jti = payload.get("jti")
+        return jti in REVOKED_JTIS
+    except:
+        return False
+
+# Register the callback
+auth.set_token_blocklist(check_if_token_revoked)
+
+@app.post("/logout")
+async def logout(request: Request):
+    """Logout by revoking the token's JTI."""
+    token = await auth.get_access_token_from_request(request)
+    payload = auth.verify_token(token)
+    
+    # Add JTI to revoked set
+    REVOKED_JTIS.add(payload.jti)
+    
+    return {"message": "Successfully logged out"}
+```
+
+<Note>
+  Using JTI is more efficient as it stores only a small identifier instead of the full token string. However, ensure your JTIs are properly generated (AuthX does this automatically using UUIDs).
+</Note>
+
+## Complete example
+
+```python
+from fastapi import FastAPI, HTTPException, Request
+from pydantic import BaseModel
+from authx import AuthX, AuthXConfig
+from authx.schema import TokenPayload
+
+app = FastAPI(title="Token Revocation Example")
+
+# Configure AuthX
+auth_config = AuthXConfig(
+    JWT_ALGORITHM="HS256",
+    JWT_SECRET_KEY="your-secret-key",
+    JWT_TOKEN_LOCATION=["headers"],
+)
+
+auth = AuthX(config=auth_config)
+auth.handle_errors(app)
+
+# Blocklist storage
+TOKEN_BLOCKLIST: set[str] = set()
+
+def check_if_token_revoked(token: str) -> bool:
+    """Check if token is revoked."""
+    return token in TOKEN_BLOCKLIST
+
+# Register the blocklist callback
+auth.set_token_blocklist(check_if_token_revoked)
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+USERS = {
+    "user1": {"password": "password1", "email": "user1@example.com"},
+    "user2": {"password": "password2", "email": "user2@example.com"},
+}
+
+@app.post("/login")
+def login(data: LoginRequest):
+    """Login and receive an access token."""
+    if data.username in USERS and USERS[data.username]["password"] == data.password:
+        access_token = auth.create_access_token(uid=data.username)
+        return {"access_token": access_token, "token_type": "bearer"}
+    
+    raise HTTPException(status_code=401, detail="Invalid credentials")
+
+@app.post("/logout")
+async def logout(request: Request):
+    """Logout and revoke the current token."""
+    token = await auth.get_access_token_from_request(request)
+    payload = auth.verify_token(token)
+    
+    # Add to blocklist
+    TOKEN_BLOCKLIST.add(token.token)
+    
+    return {"message": "Successfully logged out"}
+
+@app.get("/protected")
+async def protected_route(payload: TokenPayload = auth.ACCESS_REQUIRED):
+    """Protected route - automatically rejects revoked tokens."""
+    return {
+        "message": "Access granted",
+        "username": payload.sub,
+        "email": USERS.get(payload.sub, {}).get("email"),
+    }
+
+@app.get("/blocklist")
+def view_blocklist():
+    """View revoked tokens (for debugging)."""
+    return {"revoked_tokens": len(TOKEN_BLOCKLIST)}
+```
+
+## Cleanup strategies
+
+Expired tokens should be removed from the blocklist to save space:
+
+```python
+import time
+from typing import Dict
+
+# Store tokens with expiration times
+BLOCKLIST: Dict[str, int] = {}  # token -> expiration_timestamp
+
+def check_if_token_revoked(token: str) -> bool:
+    """Check if token is revoked and not expired."""
+    if token not in BLOCKLIST:
+        return False
+    
+    # Check if blocklist entry has expired
+    if BLOCKLIST[token] < time.time():
+        # Token expiration passed, remove from blocklist
+        del BLOCKLIST[token]
+        return False
+    
+    return True
+
+def revoke_token_with_expiry(token: str, payload: TokenPayload):
+    """Add token to blocklist with its expiration time."""
+    exp_timestamp = payload.exp
+    BLOCKLIST[token] = exp_timestamp
+
+# Periodic cleanup task
+import asyncio
+
+async def cleanup_blocklist():
+    """Remove expired entries from blocklist."""
+    while True:
+        await asyncio.sleep(3600)  # Run every hour
+        current_time = time.time()
+        expired = [t for t, exp in BLOCKLIST.items() if exp < current_time]
+        for token in expired:
+            del BLOCKLIST[token]
+```
+
+## Best practices
+
+<Note>
+  **Recommendations for token revocation:**
+  
+  - Use Redis or a similar fast store in production (not in-memory sets)
+  - Store JTI instead of full tokens to save space
+  - Set TTL on blocklist entries to match token expiration
+  - Implement periodic cleanup for expired blocklist entries
+  - Consider revoking both access and refresh tokens on logout
+  - Revoke all tokens when password changes
+  - Monitor blocklist size and performance
+  - Use async callbacks for database/Redis operations
+</Note>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Scopes and permissions" icon="shield-check" href="/guides/scopes-and-permissions">
+    Add fine-grained access control to your API
+  </Card>
+  <Card title="Cookie authentication" icon="cookie" href="/guides/cookie-authentication">
+    Use HTTP-only cookies for token storage
+  </Card>
+  <Card title="Custom callbacks" icon="code" href="/guides/custom-callbacks">
+    Implement custom authentication logic
+  </Card>
+  <Card title="Error handling" icon="triangle-exclamation" href="/guides/error-handling">
+    Handle revocation errors gracefully
+  </Card>
+</CardGroup>

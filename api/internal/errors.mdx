@@ -1,0 +1,312 @@
+---
+title: Error handling
+description: Internal error handler for FastAPI exception management
+---
+
+The `_ErrorHandler` class provides automatic exception handling for AuthX-specific errors in FastAPI applications. It converts AuthX exceptions into standardized JSON error responses.
+
+## Overview
+
+The error handler:
+- Registers exception handlers for all AuthX exception types
+- Returns consistent JSON error responses
+- Maps exceptions to appropriate HTTP status codes
+- Allows customization of error messages
+
+<Note>
+This is an internal API. Most users should use the `handle_errors()` method on the main AuthX instance, which uses this handler internally.
+</Note>
+
+## Class: `_ErrorHandler`
+
+Handles FastAPI exception registration for AuthX exceptions.
+
+### Error messages
+
+Default error messages for each exception type:
+
+<ParamField path="MSG_TokenError" type="str">
+  `"Token Error"` - Generic token error message
+</ParamField>
+
+<ParamField path="MSG_MissingTokenError" type="str">
+  `"Missing JWT in request"` - No token provided in request
+</ParamField>
+
+<ParamField path="MSG_MissingCSRFTokenError" type="None">
+  Uses the detailed exception message for better user guidance
+</ParamField>
+
+<ParamField path="MSG_TokenTypeError" type="str">
+  `"Bad token type"` - Wrong token type (e.g., refresh token used where access token required)
+</ParamField>
+
+<ParamField path="MSG_RevokedTokenError" type="str">
+  `"Invalid token"` - Token has been revoked
+</ParamField>
+
+<ParamField path="MSG_TokenRequiredError" type="str">
+  `"Token required"` - Token is required but missing
+</ParamField>
+
+<ParamField path="MSG_FreshTokenRequiredError" type="str">
+  `"Fresh token required"` - Operation requires a fresh token
+</ParamField>
+
+<ParamField path="MSG_AccessTokenRequiredError" type="str">
+  `"Access token required"` - Access token specifically required
+</ParamField>
+
+<ParamField path="MSG_RefreshTokenRequiredError" type="str">
+  `"Refresh token required"` - Refresh token specifically required
+</ParamField>
+
+<ParamField path="MSG_CSRFError" type="str">
+  `"CSRF double submit does not match"` - CSRF validation failed
+</ParamField>
+
+<ParamField path="MSG_JWTDecodeError" type="str">
+  `"Invalid Token"` - Token could not be decoded
+</ParamField>
+
+<ParamField path="MSG_InsufficientScopeError" type="None">
+  Uses the detailed exception message showing required vs provided scopes
+</ParamField>
+
+### Methods
+
+#### `handle_errors`
+
+Register all AuthX exception handlers with a FastAPI application.
+
+```python
+def handle_errors(app: FastAPI) -> None
+```
+
+<ParamField path="app" type="FastAPI" required>
+  The FastAPI application instance to register handlers with
+</ParamField>
+
+**Example:**
+
+```python
+from fastapi import FastAPI
+from authx._internal._error import _ErrorHandler
+
+app = FastAPI()
+error_handler = _ErrorHandler()
+error_handler.handle_errors(app)
+```
+
+This registers handlers for:
+- `JWTDecodeError` (422 status)
+- `MissingTokenError` (401 status)
+- `MissingCSRFTokenError` (401 status)
+- `TokenTypeError` (401 status)
+- `RevokedTokenError` (401 status)
+- `TokenRequiredError` (401 status)
+- `FreshTokenRequiredError` (401 status)
+- `AccessTokenRequiredError` (401 status)
+- `RefreshTokenRequiredError` (401 status)
+- `CSRFError` (401 status)
+- `InsufficientScopeError` (403 status)
+
+#### `_error_handler`
+
+Internal async method that generates JSON error responses.
+
+```python
+async def _error_handler(
+    request: Request,
+    exc: AuthXException,
+    status_code: int,
+    message: Optional[str]
+) -> JSONResponse
+```
+
+<ParamField path="request" type="Request" required>
+  The FastAPI request object
+</ParamField>
+
+<ParamField path="exc" type="AuthXException" required>
+  The exception that was raised
+</ParamField>
+
+<ParamField path="status_code" type="int" required>
+  HTTP status code to return
+</ParamField>
+
+<ParamField path="message" type="str | None" required>
+  Default error message. If `None`, uses the exception's string representation or the class attribute message.
+</ParamField>
+
+**Response format:**
+
+```json
+{
+  "message": "Token required",
+  "error_type": "TokenRequiredError"
+}
+```
+
+#### `_set_app_exception_handler`
+
+Internal method to register a single exception handler.
+
+```python
+def _set_app_exception_handler(
+    app: FastAPI,
+    exception: type[AuthXException],
+    status_code: int,
+    message: Optional[str]
+) -> None
+```
+
+<ParamField path="app" type="FastAPI" required>
+  FastAPI application instance
+</ParamField>
+
+<ParamField path="exception" type="type[AuthXException]" required>
+  Exception class to handle
+</ParamField>
+
+<ParamField path="status_code" type="int" required>
+  HTTP status code for this exception
+</ParamField>
+
+<ParamField path="message" type="str | None" required>
+  Custom error message or `None` to use exception message
+</ParamField>
+
+## Customizing error messages
+
+To customize error messages, subclass `_ErrorHandler` and override the message attributes:
+
+```python
+from authx._internal._error import _ErrorHandler
+from fastapi import FastAPI
+
+class CustomErrorHandler(_ErrorHandler):
+    MSG_TokenRequiredError = "You must be logged in to access this resource"
+    MSG_AccessTokenRequiredError = "Please provide a valid access token"
+    MSG_InsufficientScopeError = "You don't have permission to perform this action"
+
+app = FastAPI()
+handler = CustomErrorHandler()
+handler.handle_errors(app)
+```
+
+<Warning>
+Changing error messages may break client applications that depend on specific error message formats. Consider versioning your API when making message changes.
+</Warning>
+
+## Error response structure
+
+All AuthX errors return a consistent JSON structure:
+
+```json
+{
+  "message": "Human-readable error message",
+  "error_type": "ExceptionClassName"
+}
+```
+
+**Example responses:**
+
+```json
+// 401 Unauthorized - Missing token
+{
+  "message": "Token required",
+  "error_type": "TokenRequiredError"
+}
+
+// 403 Forbidden - Insufficient scopes
+{
+  "message": "Insufficient scope. Required: ['admin:write'], Provided: ['admin:read']",
+  "error_type": "InsufficientScopeError"
+}
+
+// 422 Unprocessable Entity - Invalid token
+{
+  "message": "Invalid Token",
+  "error_type": "JWTDecodeError"
+}
+```
+
+## HTTP status codes
+
+AuthX exceptions map to these HTTP status codes:
+
+| Status Code | Exception Types |
+|-------------|----------------|
+| 401 Unauthorized | `MissingTokenError`, `MissingCSRFTokenError`, `TokenTypeError`, `RevokedTokenError`, `TokenRequiredError`, `FreshTokenRequiredError`, `AccessTokenRequiredError`, `RefreshTokenRequiredError`, `CSRFError` |
+| 403 Forbidden | `InsufficientScopeError` |
+| 422 Unprocessable Entity | `JWTDecodeError` |
+
+<Note>
+401 indicates authentication failure (who you are), while 403 indicates authorization failure (what you can do).
+</Note>
+
+## Integration with FastAPI
+
+The error handler integrates seamlessly with FastAPI's exception handling system:
+
+```python
+from fastapi import FastAPI, Depends
+from authx import AuthX, TokenPayload
+from authx.exceptions import TokenRequiredError
+
+app = FastAPI()
+security = AuthX()
+
+# Automatically registered by security.handle_errors(app)
+security.handle_errors(app)
+
+@app.get("/protected")
+async def protected_route(token: TokenPayload = Depends(security.access_token_required)):
+    return {"message": "Success", "user_id": token.sub}
+
+# If token is missing, AuthX raises TokenRequiredError
+# The error handler converts it to:
+# {"message": "Token required", "error_type": "TokenRequiredError"}
+# with 401 status code
+```
+
+## Advanced usage
+
+For advanced error handling scenarios, you can combine the error handler with custom middleware:
+
+```python
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
+from authx._internal._error import _ErrorHandler
+import logging
+
+logger = logging.getLogger(__name__)
+
+class LoggingErrorHandler(_ErrorHandler):
+    async def _error_handler(
+        self,
+        request: Request,
+        exc: AuthXException,
+        status_code: int,
+        message: Optional[str]
+    ) -> JSONResponse:
+        # Log the error with context
+        logger.warning(
+            f"AuthX error: {exc.__class__.__name__}",
+            extra={
+                "path": request.url.path,
+                "method": request.method,
+                "client": request.client.host if request.client else None,
+                "error": str(exc)
+            }
+        )
+        
+        # Call parent implementation
+        return await super()._error_handler(request, exc, status_code, message)
+
+app = FastAPI()
+handler = LoggingErrorHandler()
+handler.handle_errors(app)
+```

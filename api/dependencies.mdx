@@ -1,0 +1,473 @@
+---
+title: AuthXDependency
+description: Context-aware dependency for managing authentication within route handlers
+---
+
+The `AuthXDependency` class provides a convenient interface for authentication operations within FastAPI route handlers. It wraps the `AuthX` instance with the current request and response context, enabling easy token creation and cookie management without manual parameter passing.
+
+## Overview
+
+`AuthXDependency` is typically accessed through the `auth.DEPENDENCY` or `auth.BUNDLE` properties and injected into routes using FastAPI's dependency injection system.
+
+```python
+from fastapi import Depends
+from authx import AuthX
+
+auth = AuthX()
+
+@app.post("/login")
+def login(bundle: auth.DEPENDENCY, credentials: LoginCredentials):
+    # Verify credentials
+    user_id = verify_credentials(credentials)
+    
+    # Create and set tokens using the bundle
+    access_token = bundle.create_access_token(uid=user_id)
+    bundle.set_access_cookies(access_token)
+    
+    return {"message": "Logged in"}
+```
+
+## Constructor
+
+The constructor is typically not called directly. Instead, use `auth.DEPENDENCY` or `auth.get_dependency()`.
+
+<ParamField path="_from" type="AuthX[T]" required>
+  The parent AuthX instance
+</ParamField>
+
+<ParamField path="request" type="Request" required>
+  The current FastAPI Request object
+</ParamField>
+
+<ParamField path="response" type="Response" required>
+  The current FastAPI Response object
+</ParamField>
+
+## Properties
+
+### request
+
+Access the current HTTP request object.
+
+<ResponseField name="return" type="Request">
+  The FastAPI Request object for this context
+</ResponseField>
+
+```python
+@app.get("/info")
+def route_info(bundle: auth.DEPENDENCY):
+    client_host = bundle.request.client.host
+    return {"client": client_host}
+```
+
+### response
+
+Access the current HTTP response object.
+
+<ResponseField name="return" type="Response">
+  The FastAPI Response object for this context
+</ResponseField>
+
+```python
+@app.get("/custom")
+def custom_headers(bundle: auth.DEPENDENCY):
+    bundle.response.headers["X-Custom"] = "value"
+    return {"status": "ok"}
+```
+
+## Token creation
+
+### create_access_token()
+
+Generate an access token.
+
+<ParamField path="uid" type="str" required>
+  Unique identifier for the user/subject
+</ParamField>
+
+<ParamField path="fresh" type="bool" default="False">
+  Mark the token as fresh for sensitive operations
+</ParamField>
+
+<ParamField path="headers" type="Optional[dict[str, Any]]" default="None">
+  Custom JWT headers
+</ParamField>
+
+<ParamField path="expiry" type="Optional[DateTimeExpression]" default="None">
+  Custom expiration time (datetime or timedelta)
+</ParamField>
+
+<ParamField path="data" type="Optional[dict[str, Any]]" default="None">
+  Additional data to embed in the token
+</ParamField>
+
+<ParamField path="audience" type="Optional[StringOrSequence]" default="None">
+  Token audience claim
+</ParamField>
+
+<ResponseField name="return" type="str">
+  The encoded JWT access token
+</ResponseField>
+
+```python
+@app.post("/login")
+def login(bundle: auth.DEPENDENCY, username: str, password: str):
+    user_id = authenticate(username, password)
+    
+    # Create fresh token for login
+    token = bundle.create_access_token(uid=user_id, fresh=True)
+    
+    # Create token with custom data
+    token = bundle.create_access_token(
+        uid=user_id,
+        data={"role": "admin", "permissions": ["read", "write"]}
+    )
+    
+    return {"access_token": token}
+```
+
+### create_refresh_token()
+
+Generate a refresh token.
+
+<ParamField path="uid" type="str" required>
+  Unique identifier for the user/subject
+</ParamField>
+
+<ParamField path="headers" type="Optional[dict[str, Any]]" default="None">
+  Custom JWT headers
+</ParamField>
+
+<ParamField path="expiry" type="Optional[DateTimeExpression]" default="None">
+  Custom expiration time
+</ParamField>
+
+<ParamField path="data" type="Optional[dict[str, Any]]" default="None">
+  Additional data to embed in the token
+</ParamField>
+
+<ParamField path="audience" type="Optional[StringOrSequence]" default="None">
+  Token audience claim
+</ParamField>
+
+<ResponseField name="return" type="str">
+  The encoded JWT refresh token
+</ResponseField>
+
+```python
+@app.post("/login")
+def login(bundle: auth.DEPENDENCY, username: str, password: str):
+    user_id = authenticate(username, password)
+    
+    access_token = bundle.create_access_token(uid=user_id, fresh=True)
+    refresh_token = bundle.create_refresh_token(uid=user_id)
+    
+    return {
+        "access_token": access_token,
+        "refresh_token": refresh_token
+    }
+```
+
+## Cookie management
+
+### set_access_cookies()
+
+Set access token cookies in the response.
+
+<ParamField path="token" type="str" required>
+  The access token to store in cookies
+</ParamField>
+
+<ParamField path="response" type="Optional[Response]" default="None">
+  Optional response object. Uses the stored response if not provided.
+</ParamField>
+
+<ParamField path="max_age" type="Optional[int]" default="None">
+  Maximum age in seconds for the cookie
+</ParamField>
+
+```python
+@app.post("/login")
+def login(bundle: auth.DEPENDENCY, credentials: LoginCredentials):
+    user_id = authenticate(credentials)
+    token = bundle.create_access_token(uid=user_id)
+    
+    # Set cookie using the bundle's response
+    bundle.set_access_cookies(token)
+    
+    return {"message": "Logged in"}
+```
+
+<Note>
+  When `response` is not provided, the method uses the response object from the dependency context. This is the typical usage pattern.
+</Note>
+
+### set_refresh_cookies()
+
+Set refresh token cookies in the response.
+
+<ParamField path="token" type="str" required>
+  The refresh token to store in cookies
+</ParamField>
+
+<ParamField path="response" type="Optional[Response]" default="None">
+  Optional response object
+</ParamField>
+
+<ParamField path="max_age" type="Optional[int]" default="None">
+  Maximum age in seconds
+</ParamField>
+
+```python
+@app.post("/login")
+def login(bundle: auth.DEPENDENCY, credentials: LoginCredentials):
+    user_id = authenticate(credentials)
+    
+    access_token = bundle.create_access_token(uid=user_id)
+    refresh_token = bundle.create_refresh_token(uid=user_id)
+    
+    bundle.set_access_cookies(access_token)
+    bundle.set_refresh_cookies(refresh_token)
+    
+    return {"message": "Logged in with refresh token"}
+```
+
+### unset_access_cookies()
+
+Remove access token cookies from the response.
+
+<ParamField path="response" type="Optional[Response]" default="None">
+  Optional response object
+</ParamField>
+
+```python
+@app.post("/logout")
+def logout(bundle: auth.DEPENDENCY):
+    bundle.unset_access_cookies()
+    return {"message": "Logged out"}
+```
+
+### unset_refresh_cookies()
+
+Remove refresh token cookies from the response.
+
+<ParamField path="response" type="Optional[Response]" default="None">
+  Optional response object
+</ParamField>
+
+### unset_cookies()
+
+Remove both access and refresh token cookies from the response.
+
+<ParamField path="response" type="Optional[Response]" default="None">
+  Optional response object
+</ParamField>
+
+```python
+@app.post("/logout")
+def logout(bundle: auth.DEPENDENCY):
+    # Remove all authentication cookies
+    bundle.unset_cookies()
+    return {"message": "Fully logged out"}
+```
+
+## Current subject
+
+### get_current_subject()
+
+Retrieve the currently authenticated subject/user from the request.
+
+<ResponseField name="return" type="Optional[T]">
+  The authenticated subject if present, None otherwise
+</ResponseField>
+
+```python
+from models import User
+
+auth = AuthX[User]()
+
+@app.get("/me")
+async def get_profile(bundle: auth.DEPENDENCY):
+    user = await bundle.get_current_subject()
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    
+    return {
+        "username": user.username,
+        "email": user.email
+    }
+```
+
+<Note>
+  You must implement the subject callback using `@auth.set_subject_getter` decorator for this method to return user data. See the [callbacks documentation](/api/internal/callbacks) for details.
+</Note>
+
+## Complete examples
+
+### Login with cookie authentication
+
+```python
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+from authx import AuthX, AuthXConfig
+
+config = AuthXConfig(
+    JWT_SECRET_KEY="your-secret-key",
+    JWT_TOKEN_LOCATION=["cookies"],
+    JWT_COOKIE_CSRF_PROTECT=True
+)
+
+auth = AuthX(config=config)
+app = FastAPI()
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+@app.post("/login")
+def login(bundle: auth.DEPENDENCY, credentials: LoginRequest):
+    # Verify credentials (implement your logic)
+    if not verify_password(credentials.username, credentials.password):
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+    
+    user_id = get_user_id(credentials.username)
+    
+    # Create tokens
+    access_token = bundle.create_access_token(
+        uid=user_id,
+        fresh=True,
+        data={"username": credentials.username}
+    )
+    refresh_token = bundle.create_refresh_token(uid=user_id)
+    
+    # Set cookies
+    bundle.set_access_cookies(access_token)
+    bundle.set_refresh_cookies(refresh_token)
+    
+    return {
+        "message": "Successfully logged in",
+        "user_id": user_id
+    }
+
+@app.post("/logout")
+def logout(bundle: auth.DEPENDENCY):
+    bundle.unset_cookies()
+    return {"message": "Successfully logged out"}
+```
+
+### Refresh token endpoint
+
+```python
+from fastapi import Depends
+from authx.schema import TokenPayload
+
+@app.post("/refresh")
+def refresh_tokens(
+    bundle: auth.DEPENDENCY,
+    payload: TokenPayload = Depends(auth.REFRESH_REQUIRED)
+):
+    # Create new access token from refresh token
+    new_access_token = bundle.create_access_token(
+        uid=payload.sub,
+        fresh=False  # Refreshed tokens are not fresh
+    )
+    
+    # Update the access cookie
+    bundle.set_access_cookies(new_access_token)
+    
+    return {
+        "message": "Token refreshed",
+        "access_token": new_access_token
+    }
+```
+
+### Mixed header and cookie authentication
+
+```python
+config = AuthXConfig(
+    JWT_SECRET_KEY="your-secret-key",
+    JWT_TOKEN_LOCATION=["headers", "cookies"]
+)
+
+auth = AuthX(config=config)
+
+@app.post("/login")
+def login(bundle: auth.DEPENDENCY, credentials: LoginRequest):
+    user_id = authenticate(credentials)
+    
+    # Create tokens
+    access_token = bundle.create_access_token(uid=user_id, fresh=True)
+    refresh_token = bundle.create_refresh_token(uid=user_id)
+    
+    # Set cookies for browser clients
+    bundle.set_access_cookies(access_token)
+    bundle.set_refresh_cookies(refresh_token)
+    
+    # Also return tokens for API clients
+    return {
+        "access_token": access_token,
+        "refresh_token": refresh_token,
+        "token_type": "bearer"
+    }
+```
+
+### Custom token expiry
+
+```python
+from datetime import timedelta
+
+@app.post("/short-lived-token")
+def create_short_token(bundle: auth.DEPENDENCY, user_id: str):
+    # Create token that expires in 5 minutes
+    token = bundle.create_access_token(
+        uid=user_id,
+        expiry=timedelta(minutes=5)
+    )
+    return {"token": token}
+
+@app.post("/long-lived-token")
+def create_long_token(bundle: auth.DEPENDENCY, user_id: str):
+    # Create token that expires in 7 days
+    token = bundle.create_access_token(
+        uid=user_id,
+        expiry=timedelta(days=7)
+    )
+    return {"token": token}
+```
+
+### Working with current subject
+
+```python
+from models import User
+
+auth = AuthX[User]()
+
+# Set up the subject getter callback
+@auth.set_subject_getter
+async def get_user_from_id(uid: str) -> Optional[User]:
+    return await database.get_user_by_id(uid)
+
+@app.get("/profile")
+async def get_profile(bundle: auth.DEPENDENCY):
+    user = await bundle.get_current_subject()
+    if not user:
+        raise HTTPException(status_code=401)
+    
+    return {
+        "id": user.id,
+        "username": user.username,
+        "email": user.email,
+        "created_at": user.created_at
+    }
+
+@app.patch("/profile")
+async def update_profile(bundle: auth.DEPENDENCY, updates: ProfileUpdate):
+    user = await bundle.get_current_subject()
+    if not user:
+        raise HTTPException(status_code=401)
+    
+    # Update user profile
+    await database.update_user(user.id, updates)
+    
+    return {"message": "Profile updated"}
+```

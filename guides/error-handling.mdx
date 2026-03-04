@@ -1,0 +1,636 @@
+---
+title: Error handling
+description: Handle authentication errors and exceptions in AuthX
+---
+
+AuthX provides comprehensive error handling with specific exception types for different authentication failures. Learn how to handle these errors gracefully and provide clear feedback to your users.
+
+## Built-in error handling
+
+AuthX automatically converts exceptions to JSON responses when you register the error handler:
+
+```python
+from fastapi import FastAPI
+from authx import AuthX, AuthXConfig
+
+app = FastAPI()
+
+auth_config = AuthXConfig(
+    JWT_ALGORITHM="HS256",
+    JWT_SECRET_KEY="your-secret-key",
+)
+
+auth = AuthX(config=auth_config)
+
+# Register automatic error handlers
+auth.handle_errors(app)
+```
+
+This automatically handles all AuthX exceptions with appropriate HTTP status codes and error messages.
+
+## Exception types
+
+AuthX provides specific exceptions for different error scenarios:
+
+### Token errors
+
+<CodeGroup>
+
+```python MissingTokenError
+# Raised when no token is found in the request
+from authx.exceptions import MissingTokenError
+
+# HTTP 401
+# {"message": "Missing JWT in request", "error_type": "MissingTokenError"}
+```
+
+```python TokenTypeError
+# Raised when the wrong token type is used
+from authx.exceptions import TokenTypeError
+
+# HTTP 401
+# {"message": "Bad token type", "error_type": "TokenTypeError"}
+# Example: Using a refresh token where an access token is required
+```
+
+```python RevokedTokenError
+# Raised when a revoked/blocklisted token is used
+from authx.exceptions import RevokedTokenError
+
+# HTTP 401
+# {"message": "Invalid token", "error_type": "RevokedTokenError"}
+```
+
+```python FreshTokenRequiredError
+# Raised when a fresh token is required but not provided
+from authx.exceptions import FreshTokenRequiredError
+
+# HTTP 401
+# {"message": "Fresh token required", "error_type": "FreshTokenRequiredError"}
+```
+
+```python AccessTokenRequiredError
+# Raised when an access token is required
+from authx.exceptions import AccessTokenRequiredError
+
+# HTTP 401
+# {"message": "Access token required", "error_type": "AccessTokenRequiredError"}
+```
+
+```python RefreshTokenRequiredError
+# Raised when a refresh token is required
+from authx.exceptions import RefreshTokenRequiredError
+
+# HTTP 401
+# {"message": "Refresh token required", "error_type": "RefreshTokenRequiredError"}
+```
+
+</CodeGroup>
+
+### JWT errors
+
+```python
+from authx.exceptions import JWTDecodeError
+
+# Raised when JWT decoding fails (invalid signature, expired, malformed)
+# HTTP 422
+# {"message": "Invalid Token", "error_type": "JWTDecodeError"}
+```
+
+### CSRF errors
+
+```python
+from authx.exceptions import CSRFError, MissingCSRFTokenError
+
+# CSRFError - CSRF token validation failed
+# HTTP 401
+# {"message": "CSRF double submit does not match", "error_type": "CSRFError"}
+
+# MissingCSRFTokenError - CSRF token not provided
+# HTTP 401
+# Includes detailed message about how to include the CSRF token
+```
+
+### Scope errors
+
+```python
+from authx.exceptions import InsufficientScopeError
+
+# Raised when token lacks required scopes
+# HTTP 403
+# Includes required and provided scopes in the error message
+```
+
+### Configuration errors
+
+```python
+from authx.exceptions import BadConfigurationError
+
+# Raised when AuthX configuration is invalid
+# Should only occur during startup, not runtime
+```
+
+## Custom error handlers
+
+Override default error handling with custom handlers:
+
+```python
+from fastapi import Request
+from fastapi.responses import JSONResponse
+from authx.exceptions import (
+    MissingTokenError,
+    TokenTypeError,
+    RevokedTokenError,
+    FreshTokenRequiredError,
+    InsufficientScopeError,
+    CSRFError,
+    JWTDecodeError,
+)
+
+@app.exception_handler(MissingTokenError)
+async def missing_token_handler(request: Request, exc: MissingTokenError):
+    """Custom handler for missing token errors."""
+    return JSONResponse(
+        status_code=401,
+        content={
+            "error": "authentication_required",
+            "message": "Please provide a valid authentication token",
+            "details": str(exc)
+        },
+    )
+
+@app.exception_handler(TokenTypeError)
+async def token_type_handler(request: Request, exc: TokenTypeError):
+    """Custom handler for wrong token type."""
+    return JSONResponse(
+        status_code=401,
+        content={
+            "error": "invalid_token_type",
+            "message": "The provided token type is not valid for this endpoint",
+        },
+    )
+
+@app.exception_handler(RevokedTokenError)
+async def revoked_token_handler(request: Request, exc: RevokedTokenError):
+    """Custom handler for revoked tokens."""
+    return JSONResponse(
+        status_code=401,
+        content={
+            "error": "token_revoked",
+            "message": "This token has been revoked. Please log in again.",
+        },
+    )
+
+@app.exception_handler(FreshTokenRequiredError)
+async def fresh_token_handler(request: Request, exc: FreshTokenRequiredError):
+    """Custom handler for fresh token requirement."""
+    return JSONResponse(
+        status_code=401,
+        content={
+            "error": "fresh_token_required",
+            "message": "This operation requires recent authentication",
+            "action": "Please verify your password to continue",
+        },
+    )
+
+@app.exception_handler(InsufficientScopeError)
+async def insufficient_scope_handler(request: Request, exc: InsufficientScopeError):
+    """Custom handler for insufficient scope errors."""
+    return JSONResponse(
+        status_code=403,
+        content={
+            "error": "insufficient_scope",
+            "message": "You don't have permission to perform this action",
+            "required_scopes": exc.required,
+            "provided_scopes": exc.provided,
+        },
+    )
+
+@app.exception_handler(CSRFError)
+async def csrf_error_handler(request: Request, exc: CSRFError):
+    """Custom handler for CSRF errors."""
+    return JSONResponse(
+        status_code=401,
+        content={
+            "error": "csrf_validation_failed",
+            "message": str(exc),
+            "hint": "Include the X-CSRF-TOKEN header from the csrf_access_token cookie",
+        },
+    )
+
+@app.exception_handler(JWTDecodeError)
+async def jwt_decode_handler(request: Request, exc: JWTDecodeError):
+    """Custom handler for JWT decoding errors."""
+    return JSONResponse(
+        status_code=422,
+        content={
+            "error": "invalid_token",
+            "message": "The provided token is invalid or expired",
+        },
+    )
+```
+
+## Catching errors in route handlers
+
+Handle errors within your route logic:
+
+```python
+from fastapi import Request, HTTPException
+from authx.exceptions import MissingTokenError, RevokedTokenError, JWTDecodeError
+
+@app.get("/protected")
+async def protected_route(request: Request):
+    """Protected route with custom error handling."""
+    try:
+        # Get and verify token
+        token = await auth.get_access_token_from_request(request)
+        payload = auth.verify_token(token)
+        
+        return {
+            "message": "Success",
+            "user": payload.sub
+        }
+        
+    except MissingTokenError:
+        raise HTTPException(
+            status_code=401,
+            detail="Authentication required. Please log in."
+        )
+    
+    except RevokedTokenError:
+        raise HTTPException(
+            status_code=401,
+            detail="Your session has expired. Please log in again."
+        )
+    
+    except JWTDecodeError as e:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Invalid token: {str(e)}"
+        )
+```
+
+## Optional token handling
+
+Allow optional authentication:
+
+```python
+from typing import Optional
+from authx.schema import TokenPayload
+
+@app.get("/content")
+async def get_content(request: Request):
+    """Endpoint that works with or without authentication."""
+    try:
+        # Try to get token (optional)
+        token = await auth.get_token_from_request(
+            request,
+            type="access",
+            optional=True  # Don't raise exception if missing
+        )
+        
+        if token:
+            payload = auth.verify_token(token)
+            user = payload.sub
+        else:
+            user = None
+            
+    except Exception:
+        # Token present but invalid - treat as anonymous
+        user = None
+    
+    return {
+        "content": "Public content",
+        "user": user,
+        "is_authenticated": user is not None
+    }
+```
+
+## Logging errors
+
+Log authentication errors for monitoring:
+
+```python
+import logging
+from fastapi import Request
+from authx.exceptions import AuthXException
+
+logger = logging.getLogger(__name__)
+
+@app.exception_handler(AuthXException)
+async def authx_exception_handler(request: Request, exc: AuthXException):
+    """Log and handle all AuthX exceptions."""
+    # Log the error
+    logger.warning(
+        f"Authentication error: {exc.__class__.__name__}",
+        extra={
+            "error_type": exc.__class__.__name__,
+            "path": request.url.path,
+            "method": request.method,
+            "client": request.client.host if request.client else None,
+        }
+    )
+    
+    # Return appropriate response
+    if isinstance(exc, InsufficientScopeError):
+        status_code = 403
+    elif isinstance(exc, JWTDecodeError):
+        status_code = 422
+    else:
+        status_code = 401
+    
+    return JSONResponse(
+        status_code=status_code,
+        content={
+            "error": exc.__class__.__name__,
+            "message": str(exc)
+        },
+    )
+```
+
+## Error response format
+
+Default error response structure:
+
+```json
+{
+  "message": "Human-readable error message",
+  "error_type": "ExceptionClassName"
+}
+```
+
+Customize the format:
+
+```python
+from authx.exceptions import AuthXException
+
+@app.exception_handler(AuthXException)
+async def custom_authx_handler(request: Request, exc: AuthXException):
+    """Custom error response format."""
+    # Determine status code
+    status_codes = {
+        "InsufficientScopeError": 403,
+        "JWTDecodeError": 422,
+    }
+    status_code = status_codes.get(exc.__class__.__name__, 401)
+    
+    # Build custom response
+    return JSONResponse(
+        status_code=status_code,
+        content={
+            "success": False,
+            "error": {
+                "code": exc.__class__.__name__,
+                "message": str(exc),
+                "timestamp": datetime.utcnow().isoformat(),
+            }
+        },
+    )
+```
+
+## Client-side error handling
+
+Handle errors in your client application:
+
+<CodeGroup>
+
+```javascript Fetch API
+async function makeRequest(url, options = {}) {
+    try {
+        const response = await fetch(url, {
+            ...options,
+            credentials: 'include'
+        });
+        
+        if (!response.ok) {
+            const error = await response.json();
+            
+            // Handle specific error types
+            switch (error.error_type) {
+                case 'MissingTokenError':
+                    // Redirect to login
+                    window.location.href = '/login';
+                    break;
+                    
+                case 'FreshTokenRequiredError':
+                    // Prompt for password verification
+                    await promptPasswordVerification();
+                    // Retry request with fresh token
+                    return makeRequest(url, options);
+                    
+                case 'InsufficientScopeError':
+                    // Show permission denied message
+                    showError('You don\'t have permission for this action');
+                    break;
+                    
+                case 'RevokedTokenError':
+                    // Token revoked, redirect to login
+                    window.location.href = '/login?reason=session_expired';
+                    break;
+                    
+                case 'JWTDecodeError':
+                    // Invalid token, clear and redirect
+                    clearTokens();
+                    window.location.href = '/login';
+                    break;
+                    
+                default:
+                    showError(error.message);
+            }
+            
+            throw error;
+        }
+        
+        return response.json();
+        
+    } catch (error) {
+        console.error('Request failed:', error);
+        throw error;
+    }
+}
+```
+
+```python Python (httpx)
+import httpx
+from typing import Optional
+
+class AuthClient:
+    def __init__(self, base_url: str):
+        self.client = httpx.Client(base_url=base_url)
+        self.access_token: Optional[str] = None
+    
+    def request(self, method: str, url: str, **kwargs):
+        """Make request with error handling."""
+        try:
+            response = self.client.request(method, url, **kwargs)
+            response.raise_for_status()
+            return response.json()
+            
+        except httpx.HTTPStatusError as e:
+            error = e.response.json()
+            error_type = error.get("error_type")
+            
+            if error_type == "MissingTokenError":
+                # Need to login
+                raise AuthenticationRequired("Please log in")
+            
+            elif error_type == "FreshTokenRequiredError":
+                # Need fresh token
+                raise FreshTokenRequired("Please verify your password")
+            
+            elif error_type == "InsufficientScopeError":
+                # Permission denied
+                raise PermissionDenied(error.get("message"))
+            
+            elif error_type == "RevokedTokenError":
+                # Token revoked
+                self.access_token = None
+                raise SessionExpired("Your session has expired")
+            
+            else:
+                raise AuthenticationError(error.get("message"))
+```
+
+</CodeGroup>
+
+## Complete example
+
+```python
+from fastapi import FastAPI, Request, HTTPException
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel
+from authx import AuthX, AuthXConfig
+from authx.exceptions import (
+    AuthXException,
+    MissingTokenError,
+    RevokedTokenError,
+    FreshTokenRequiredError,
+    InsufficientScopeError,
+    CSRFError,
+)
+from authx.schema import TokenPayload
+import logging
+
+logger = logging.getLogger(__name__)
+
+app = FastAPI(title="Error Handling Example")
+
+auth_config = AuthXConfig(
+    JWT_ALGORITHM="HS256",
+    JWT_SECRET_KEY="your-secret-key",
+)
+
+auth = AuthX(config=auth_config)
+
+# Register built-in error handlers
+auth.handle_errors(app)
+
+# Add custom error handlers
+@app.exception_handler(FreshTokenRequiredError)
+async def fresh_token_handler(request: Request, exc: FreshTokenRequiredError):
+    """Custom handler for fresh token requirement."""
+    logger.warning(f"Fresh token required for {request.url.path}")
+    return JSONResponse(
+        status_code=401,
+        content={
+            "error": "fresh_token_required",
+            "message": "This operation requires recent authentication",
+            "action": "verify_password",
+        },
+    )
+
+@app.exception_handler(InsufficientScopeError)
+async def scope_handler(request: Request, exc: InsufficientScopeError):
+    """Custom handler for insufficient scopes."""
+    logger.warning(
+        f"Insufficient scope: required={exc.required}, provided={exc.provided}"
+    )
+    return JSONResponse(
+        status_code=403,
+        content={
+            "error": "insufficient_scope",
+            "message": "You don't have permission for this action",
+            "required": exc.required,
+            "provided": exc.provided,
+        },
+    )
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+USERS = {
+    "user1": {"password": "password1", "email": "user1@example.com"},
+}
+
+@app.post("/login")
+def login(data: LoginRequest):
+    """Login endpoint."""
+    if data.username in USERS and USERS[data.username]["password"] == data.password:
+        access_token = auth.create_access_token(uid=data.username, fresh=True)
+        return {"access_token": access_token, "token_type": "bearer"}
+    
+    raise HTTPException(status_code=401, detail="Invalid credentials")
+
+@app.get("/protected")
+async def protected_route(payload: TokenPayload = auth.ACCESS_REQUIRED):
+    """Protected route - errors handled automatically."""
+    return {"message": "Success", "user": payload.sub}
+
+@app.post("/sensitive")
+async def sensitive_operation(payload: TokenPayload = auth.FRESH_REQUIRED):
+    """Sensitive operation requiring fresh token."""
+    return {"message": "Operation completed", "user": payload.sub}
+
+@app.get("/optional-auth")
+async def optional_auth(request: Request):
+    """Endpoint with optional authentication."""
+    try:
+        token = await auth.get_token_from_request(request, optional=True)
+        if token:
+            payload = auth.verify_token(token)
+            user = payload.sub
+        else:
+            user = None
+    except Exception:
+        user = None
+    
+    return {
+        "content": "Available to everyone",
+        "user": user,
+        "authenticated": user is not None
+    }
+```
+
+## Best practices
+
+<Note>
+  **Error handling recommendations:**
+  
+  - Always use `auth.handle_errors(app)` for automatic error handling
+  - Customize error messages to be user-friendly
+  - Log authentication errors for monitoring and debugging
+  - Don't expose sensitive information in error messages
+  - Provide clear actions for users to resolve errors
+  - Use appropriate HTTP status codes (401, 403, 422)
+  - Handle errors gracefully on the client side
+  - Test error scenarios in your application
+  - Use optional authentication where appropriate
+</Note>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Custom callbacks" icon="code" href="/guides/custom-callbacks">
+    Implement custom authentication logic and error handling
+  </Card>
+  <Card title="Token revocation" icon="ban" href="/guides/token-revocation">
+    Handle revoked token errors
+  </Card>
+  <Card title="Fresh tokens" icon="sparkles" href="/guides/fresh-tokens">
+    Handle fresh token requirements
+  </Card>
+  <Card title="CSRF protection" icon="shield" href="/guides/csrf-protection">
+    Handle CSRF errors in cookie-based auth
+  </Card>
+</CardGroup>
