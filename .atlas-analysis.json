@@ -1,0 +1,152 @@
+{
+  "projectType": "sdk-library",
+  "projectName": "AuthX",
+  "projectDescription": "Ready-to-use and customizable authentication and OAuth2 management library for FastAPI",
+  "theme": "mint",
+  "primaryColor": "#3b82f6",
+  "lightColor": "#60a5fa",
+  "darkColor": "#1e40af",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "installation",
+              "quickstart"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "concepts/authentication",
+              "concepts/token-locations",
+              "concepts/token-types",
+              "concepts/configuration"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "guides/basic-usage",
+              "guides/access-and-refresh-tokens",
+              "guides/fresh-tokens",
+              "guides/token-revocation",
+              "guides/scopes-and-permissions",
+              "guides/cookie-authentication",
+              "guides/csrf-protection",
+              "guides/error-handling",
+              "guides/custom-callbacks"
+            ]
+          },
+          {
+            "group": "Advanced",
+            "pages": [
+              "advanced/implicit-refresh",
+              "advanced/multiple-token-locations",
+              "advanced/custom-models",
+              "advanced/middleware"
+            ]
+          },
+          {
+            "group": "Extra Features",
+            "pages": [
+              "extra/overview",
+              "extra/redis-cache",
+              "extra/prometheus-metrics",
+              "extra/profiling"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Core",
+            "pages": [
+              "api/authx",
+              "api/config",
+              "api/dependencies"
+            ]
+          },
+          {
+            "group": "Schemas & Types",
+            "pages": [
+              "api/schema",
+              "api/types"
+            ]
+          },
+          {
+            "group": "Exceptions",
+            "pages": [
+              "api/exceptions"
+            ]
+          },
+          {
+            "group": "Internal",
+            "pages": [
+              "api/internal/callbacks",
+              "api/internal/errors",
+              "api/internal/scopes"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Examples",
+        "groups": [
+          {
+            "group": "Examples",
+            "pages": [
+              "examples/basic-auth",
+              "examples/refresh-tokens",
+              "examples/fresh-tokens",
+              "examples/scopes",
+              "examples/token-blocklist",
+              "examples/token-locations",
+              "examples/dual-locations"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "JWT authentication with access and refresh tokens",
+    "Multiple token locations (headers, cookies, query, JSON)",
+    "Token freshness tracking for sensitive operations",
+    "Scope-based authorization with wildcard support",
+    "CSRF protection for cookie-based auth",
+    "Token revocation and blocklist support",
+    "Implicit token refresh middleware",
+    "FastAPI dependency injection integration",
+    "Customizable callbacks and error handlers",
+    "Extra features via authx-extra (Redis, metrics, profiling)"
+  ],
+  "publicApiSurface": [
+    "AuthX",
+    "AuthXConfig",
+    "AuthXDependency",
+    "TokenPayload",
+    "RequestToken",
+    "InsufficientScopeError",
+    "AuthXException",
+    "create_access_token",
+    "create_refresh_token",
+    "access_token_required",
+    "refresh_token_required",
+    "fresh_token_required",
+    "scopes_required",
+    "set_access_cookies",
+    "set_refresh_cookies",
+    "unset_cookies",
+    "get_current_subject",
+    "verify_token",
+    "is_token_in_blocklist",
+    "implicit_refresh_middleware"
+  ]
+}
